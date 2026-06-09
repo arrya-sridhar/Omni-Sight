@@ -1,0 +1,17 @@
+stages:
+  - lint
+  - test
+
+lint-job:
+  stage: lint
+  image: alpine:latest
+  script:
+    - echo "Running linting checks..."
+    - # Add actual linting command here (e.g., npm run lint)
+
+test-job:
+  stage: test
+  image: alpine:latest
+  script:
+    - echo "Running unit tests..."
+    - # Add actual testing command here (e.g., npm test)
