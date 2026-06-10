@@ -3,6 +3,7 @@
 Thumbs.db
 *.tmp
 *.swp
+*.swo
 .vscode/
 .idea/
 
@@ -12,11 +13,18 @@ Thumbs.db
 **/build/
 **/*.log
 **/.env*
+.env
+*.local
 **/__pycache__/
 **/*.pyc
 **/.venv/
 **/venv/
+**/env/
 **/*.egg-info/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+logs/
 
 # Database & local assets storage
 **/data/
