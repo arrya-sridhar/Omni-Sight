@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Gauge, AlertCircle, Eye, RefreshCw, Layers } from "lucide-react";
 import VideoPlayer from "../components/VideoPlayer";
+import { API_BASE_URL } from "../config";
 
 export default function Analytics() {
   const [videos, setVideos] = useState([]);
@@ -17,7 +18,7 @@ export default function Analytics() {
 
   const fetchVideos = async () => {
     try {
-      const res = await fetch("http://localhost:8000/api/videos");
+      const res = await fetch(`${API_BASE_URL}/api/videos`);
       const data = await res.json();
       setVideos(data || []);
       if (data && data.length > 0 && !selectedVideo) {
@@ -33,7 +34,7 @@ export default function Analytics() {
     setIsLoading(true);
     setError("");
     try {
-      const res = await fetch(`http://localhost:8000/api/videos/${video.id}/tracks`);
+      const res = await fetch(`${API_BASE_URL}/api/videos/${video.id}/tracks`);
       const data = await res.json();
       setTracks(data || []);
     } catch (err) {
@@ -79,7 +80,7 @@ export default function Analytics() {
 
         {/* Video Player */}
         <VideoPlayer
-          videoUrl={selectedVideo ? `http://localhost:8000/api/videos/${selectedVideo.id}/source` : ""}
+          videoUrl={selectedVideo ? `${API_BASE_URL}/api/videos/${selectedVideo.id}/source` : ""}
           tracks={tracks}
           speedThreshold={speedThreshold}
         />

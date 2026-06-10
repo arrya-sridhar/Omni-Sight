@@ -1,5 +1,6 @@
 import React from "react";
 import { Film, Calendar, CheckCircle, Percent } from "lucide-react";
+import { API_BASE_URL } from "../config";
 
 export default function Gallery({ results, onPlayKeyframe }) {
   const formatTime = (secs) => {
@@ -40,7 +41,7 @@ export default function Gallery({ results, onPlayKeyframe }) {
               {/* Image container */}
               <div className="relative aspect-video bg-slate-950 overflow-hidden">
                 <img
-                  src={`http://localhost:8000${result.image_url}`}
+                  src={`${API_BASE_URL}${result.image_url}`}
                   alt={result.filename}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
                   onError={(e) => {

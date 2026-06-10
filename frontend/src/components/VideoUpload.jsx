@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { UploadCloud, CheckCircle, AlertCircle, RefreshCw } from "lucide-react";
+import { API_BASE_URL } from "../config";
 
 export default function VideoUpload({ onUploadComplete }) {
   const [file, setFile] = useState(null);
@@ -27,7 +28,7 @@ export default function VideoUpload({ onUploadComplete }) {
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://localhost:8000/api/videos/upload", {
+      const response = await fetch(`${API_BASE_URL}/api/videos/upload`, {
         method: "POST",
         body: formData,
       });
@@ -52,7 +53,7 @@ export default function VideoUpload({ onUploadComplete }) {
 
     let pollInterval = setInterval(async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/videos/${videoId}`);
+        const res = await fetch(`${API_BASE_URL}/api/videos/${videoId}`);
         if (!res.ok) return;
 
         const data = await res.json();

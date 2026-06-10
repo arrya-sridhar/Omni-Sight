@@ -64,10 +64,21 @@ class SQLiteDatabase(Database):
 
     def save_video(self, video: Dict[str, Any]) -> None:
         with self._get_connection() as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO videos (id, filename, filepath, duration, frame_rate, width, height, status, created_at)
-                VALUES (:id, :filename, :filepath, :duration, :frame_rate, :width, :height, :status, :created_at)
-            """, video)
+            # Check if video already exists to avoid REPLACE delete triggers
+            row = conn.execute("SELECT 1 FROM videos WHERE id = ?", (video["id"],)).fetchone()
+            if row:
+                conn.execute("""
+                    UPDATE videos 
+                    SET filename = :filename, filepath = :filepath, duration = :duration, 
+                        frame_rate = :frame_rate, width = :width, height = :height, 
+                        status = :status, created_at = :created_at
+                    WHERE id = :id
+                """, video)
+            else:
+                conn.execute("""
+                    INSERT INTO videos (id, filename, filepath, duration, frame_rate, width, height, status, created_at)
+                    VALUES (:id, :filename, :filepath, :duration, :frame_rate, :width, :height, :status, :created_at)
+                """, video)
             conn.commit()
 
     def get_video(self, video_id: str) -> Optional[Dict[str, Any]]:

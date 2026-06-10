@@ -1,17 +1,23 @@
 stages:
-  - lint
   - test
 
-lint-job:
-  stage: lint
-  image: alpine:latest
-  script:
-    - echo "Running linting checks..."
-    - # Add actual linting command here (e.g., npm run lint)
-
-test-job:
+frontend-build:
   stage: test
-  image: alpine:latest
+  image: node:18-alpine
   script:
-    - echo "Running unit tests..."
-    - # Add actual testing command here (e.g., npm test)
+    - cd frontend
+    - npm install
+    - npm run build
+
+backend-test:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends libgl1-mesa-glx libglib2.0-0 build-essential
+    - cd backend
+    - python -m venv .venv
+    - source .venv/bin/activate
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+  script:
+    - pytest tests/

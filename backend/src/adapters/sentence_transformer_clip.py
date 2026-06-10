@@ -16,16 +16,19 @@ class SentenceTransformerCLIP(EmbeddingModel):
         if not images:
             return []
             
-        # OpenCV reads in BGR, CLIP models expect RGB
-        rgb_images = []
+        from PIL import Image
+        
+        # OpenCV reads in BGR, CLIP models expect RGB PIL Images
+        pil_images = []
         for img in images:
             if img.shape[-1] == 3:
                 rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             else:
                 rgb_img = img
-            rgb_images.append(rgb_img)
+            pil_img = Image.fromarray(rgb_img)
+            pil_images.append(pil_img)
             
-        embeddings = self.model.encode(rgb_images, show_progress_bar=False)
+        embeddings = self.model.encode(pil_images, show_progress_bar=False)
         # Convert numpy floats to standard Python float lists
         return [emb.tolist() for emb in embeddings]
         

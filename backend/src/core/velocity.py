@@ -1,5 +1,6 @@
 import uuid
 import numpy as np
+import json
 from typing import List, Dict, Any, Tuple
 
 class CentroidTracker:

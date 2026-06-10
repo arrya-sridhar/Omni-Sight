@@ -124,7 +124,10 @@ def process_video_background(
         os.makedirs(keyframes_dir, exist_ok=True)
         
         # 2. Iterate frames sequentially (Decoupled extraction)
+        logger.info("Entering frame processing loop...")
+        frame_count = 0
         for frame_index, timestamp, frame in reader.read_frames(filepath):
+            frame_count += 1
             # Run Object Tracking on every frame to maintain track IDs
             active_tracks = tracker.track_frame(frame, frame_index, timestamp)
             
@@ -141,6 +144,7 @@ def process_video_background(
                 embedding = model.get_image_embeddings([frame])[0]
                 
                 # Persist keyframe record
+                logger.info(f"Saving keyframe: index={frame_index}, time={timestamp:.2f}, path={kf_img_path}")
                 db.save_keyframe({
                     "id": kf_id,
                     "video_id": video_id,
@@ -149,6 +153,7 @@ def process_video_background(
                     "embedding": embedding,
                     "image_path": kf_img_path
                 })
+        logger.info(f"Finished frame processing loop. Total frames processed: {frame_count}")
                 
         # 3. Compile final tracked trajectories
         compiled_tracks = VelocityCalculator.compile_history(tracker.tracker, video_id)

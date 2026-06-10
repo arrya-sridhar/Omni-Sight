@@ -4,6 +4,7 @@ import SearchBar from "./components/SearchBar";
 import Gallery from "./components/Gallery";
 import Analytics from "./pages/Analytics";
 import VideoUpload from "./components/VideoUpload";
+import { API_BASE_URL } from "./config";
 
 export default function App() {
   const [results, setResults] = useState([]);
@@ -15,7 +16,7 @@ export default function App() {
     setIsLoading(true);
     setError("");
     try {
-      const response = await fetch("http://localhost:8000/api/search", {
+      const response = await fetch(`${API_BASE_URL}/api/search`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
