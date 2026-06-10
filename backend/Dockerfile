@@ -25,7 +25,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source code
 COPY src /app/src
 
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('clip-ViT-B-32'); from ultralytics import YOLO; YOLO('yolov8n.pt')"
+RUN python -c "import torch; _orig = torch.load; torch.load = lambda *a, **k: _orig(*a, **{**k, 'weights_only': False}); from sentence_transformers import SentenceTransformer; SentenceTransformer('clip-ViT-B-32'); from ultralytics import YOLO; YOLO('yolov8n.pt')"
+
 
 
 # Create directories for DB/uploads
