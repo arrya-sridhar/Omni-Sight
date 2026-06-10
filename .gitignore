@@ -1,0 +1,26 @@
+# Universal ignores
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+.vscode/
+.idea/
+
+# Ignore virtual environments, node modules, etc.
+**/node_modules/
+**/dist/
+**/build/
+**/*.log
+**/.env*
+**/__pycache__/
+**/*.pyc
+**/.venv/
+**/venv/
+**/*.egg-info/
+
+# Database & local assets storage
+**/data/
+**/uploads/
+**/*.db
+**/*.sqlite
+**/*.sqlite3

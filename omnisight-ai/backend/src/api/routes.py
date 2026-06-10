@@ -1,0 +1,293 @@
+import os
+import shutil
+import uuid
+import logging
+import json
+import cv2
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
+from pydantic import BaseModel, Field
+
+from src.adapters.sqlite_db import SQLiteDatabase
+from src.adapters.sentence_transformer_clip import SentenceTransformerCLIP
+from src.adapters.cv2_reader import CV2VideoReader
+from src.adapters.yolo_tracker import YOLOTracker
+from src.core.extractor import KeyFrameExtractor
+from src.core.velocity import VelocityCalculator
+from src.core.search import SearchService
+
+logger = logging.getLogger("omnisight-routes")
+router = APIRouter()
+
+# Dependency providers with lazy loading for CLIP
+db_instance = None
+model_instance = None
+tracker_instance = None
+reader_instance = None
+
+def get_db() -> SQLiteDatabase:
+    global db_instance
+    if db_instance is None:
+        db_instance = SQLiteDatabase()
+    return db_instance
+
+def get_model() -> SentenceTransformerCLIP:
+    global model_instance
+    if model_instance is None:
+        logger.info("Initializing SentenceTransformers CLIP model (clip-ViT-B-32)...")
+        model_instance = SentenceTransformerCLIP()
+    return model_instance
+
+def get_tracker() -> YOLOTracker:
+    global tracker_instance
+    if tracker_instance is None:
+        logger.info("Initializing YOLOv8 Tracker (yolov8n.pt)...")
+        tracker_instance = YOLOTracker()
+    return tracker_instance
+
+def get_reader() -> CV2VideoReader:
+    global reader_instance
+    if reader_instance is None:
+        reader_instance = CV2VideoReader()
+    return reader_instance
+
+def get_search_service(
+    db: SQLiteDatabase = Depends(get_db), 
+    model: SentenceTransformerCLIP = Depends(get_model)
+) -> SearchService:
+    return SearchService(db, model)
+
+
+# Request and Response schemas
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, description="Natural language search query")
+    video_ids: Optional[List[str]] = Field(default=None, description="Optional list of video IDs to filter by")
+    threshold: float = Field(default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold")
+    limit: int = Field(default=10, ge=1, description="Max search results to return")
+
+class SearchResultItem(BaseModel):
+    video_id: str
+    filename: str
+    keyframe_id: str
+    timestamp: float
+    image_url: str
+    score: float
+
+class SearchResponse(BaseModel):
+    query: str
+    results: List[SearchResultItem]
+
+
+# ----------------- Background Video Processing Pipeline -----------------
+
+def process_video_background(
+    video_id: str, 
+    filepath: str, 
+    db_path: str,
+    model_name: str,
+    tracker_model: str
+):
+    """Executes the extraction and object tracking pipeline in a separate thread."""
+    logger.info(f"Starting background processing for video {video_id} ({filepath})")
+    
+    # Instantiate clean adapters for this background thread
+    db = SQLiteDatabase(db_path)
+    reader = CV2VideoReader()
+    
+    video_record = db.get_video(video_id)
+    if not video_record:
+        logger.error(f"Video {video_id} not found in database for background processing")
+        return
+        
+    try:
+        # 1. Update status to processing and populate metadata
+        metadata = reader.get_metadata(filepath)
+        video_record.update({
+            "status": "processing",
+            "duration": metadata["duration"],
+            "frame_rate": metadata["frame_rate"],
+            "width": metadata["width"],
+            "height": metadata["height"]
+        })
+        db.save_video(video_record)
+        
+        # Instantiate model dependencies lazily inside background thread
+        model = SentenceTransformerCLIP(model_name)
+        tracker = YOLOTracker(tracker_model)
+        extractor = KeyFrameExtractor(threshold=12.0)
+        
+        tracker.reset()
+        extractor.reset()
+        
+        keyframes_dir = os.path.join(os.path.dirname(db_path), "keyframes")
+        os.makedirs(keyframes_dir, exist_ok=True)
+        
+        # 2. Iterate frames sequentially (Decoupled extraction)
+        for frame_index, timestamp, frame in reader.read_frames(filepath):
+            # Run Object Tracking on every frame to maintain track IDs
+            active_tracks = tracker.track_frame(frame, frame_index, timestamp)
+            
+            # Check if this frame is a Keyframe
+            is_kf, diff = extractor.process_frame(frame, frame_index, timestamp)
+            if is_kf:
+                kf_id = str(uuid.uuid4())
+                kf_img_path = os.path.join(keyframes_dir, f"{kf_id}.jpg")
+                
+                # Save frame image as JPEG file
+                cv2.imwrite(kf_img_path, frame)
+                
+                # Generate zero-shot vector embedding
+                embedding = model.get_image_embeddings([frame])[0]
+                
+                # Persist keyframe record
+                db.save_keyframe({
+                    "id": kf_id,
+                    "video_id": video_id,
+                    "frame_index": frame_index,
+                    "timestamp": timestamp,
+                    "embedding": embedding,
+                    "image_path": kf_img_path
+                })
+                
+        # 3. Compile final tracked trajectories
+        compiled_tracks = VelocityCalculator.compile_history(tracker.tracker, video_id)
+        db.save_tracked_objects(compiled_tracks)
+        
+        # 4. Finalize video record
+        video_record["status"] = "completed"
+        db.save_video(video_record)
+        logger.info(f"Successfully finished background processing for video {video_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed background processing for video {video_id}: {str(e)}", exc_info=True)
+        video_record["status"] = "failed"
+        db.save_video(video_record)
+
+
+# ----------------- HTTP Endpoints -----------------
+
+@router.post("/videos/upload", status_code=status.HTTP_202_ACCEPTED)
+async def upload_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    db: SQLiteDatabase = Depends(get_db)
+):
+    video_id = str(uuid.uuid4())
+    uploads_dir = "uploads"
+    os.makedirs(uploads_dir, exist_ok=True)
+    
+    filepath = os.path.join(uploads_dir, f"{video_id}_{file.filename}")
+    
+    # Save uploaded file to disk
+    with open(filepath, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    # Create initial pending video record
+    video_record = {
+        "id": video_id,
+        "filename": file.filename,
+        "filepath": filepath,
+        "duration": 0.0,
+        "frame_rate": 0.0,
+        "width": 0,
+        "height": 0,
+        "status": "pending",
+        "created_at": uuid.uuid4().hex # dummy timestamp or date
+    }
+    # Add real timestamp
+    import datetime
+    video_record["created_at"] = datetime.datetime.now().isoformat()
+    db.save_video(video_record)
+    
+    # Trigger parallel background task thread
+    background_tasks.add_task(
+        process_video_background,
+        video_id=video_id,
+        filepath=filepath,
+        db_path=db.db_path,
+        model_name="clip-ViT-B-32",
+        tracker_model="yolov8n.pt"
+    )
+    
+    return {
+        "id": video_id,
+        "filename": file.filename,
+        "status": "pending"
+    }
+
+@router.get("/videos/{id}/source", status_code=status.HTTP_200_OK)
+async def get_video_source(id: str, db: SQLiteDatabase = Depends(get_db)):
+    video = db.get_video(id)
+    if not video:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+        
+    filepath = video["filepath"]
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source video file not found")
+        
+    return FileResponse(filepath, media_type="video/mp4")
+
+@router.post("/search", response_model=SearchResponse, status_code=status.HTTP_200_OK)
+async def search_keyframes(
+    req: SearchRequest, 
+    search_service: SearchService = Depends(get_search_service)
+):
+    try:
+        results = search_service.search(
+            query=req.query,
+            video_ids=req.video_ids,
+            threshold=req.threshold,
+            limit=req.limit
+        )
+        return SearchResponse(query=req.query, results=results)
+    except Exception as e:
+        logger.error(f"Search failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Search failed due to internal error: {str(e)}"
+        )
+
+@router.get("/keyframes/{id}/image", status_code=status.HTTP_200_OK)
+async def get_keyframe_image(id: str, db: SQLiteDatabase = Depends(get_db)):
+    kf = db.get_keyframe(id)
+    if not kf:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Keyframe with ID {id} not found"
+        )
+        
+    image_path = kf["image_path"]
+    if not os.path.exists(image_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Keyframe image file at {image_path} does not exist"
+        )
+        
+    return FileResponse(image_path, media_type="image/jpeg")
+
+@router.get("/videos", status_code=status.HTTP_200_OK)
+async def list_videos(db: SQLiteDatabase = Depends(get_db)):
+    return db.list_videos()
+
+@router.get("/videos/{id}", status_code=status.HTTP_200_OK)
+async def get_video(id: str, db: SQLiteDatabase = Depends(get_db)):
+    video = db.get_video(id)
+    if not video:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+    return video
+
+@router.get("/videos/{id}/tracks", status_code=status.HTTP_200_OK)
+async def get_video_tracks(id: str, db: SQLiteDatabase = Depends(get_db)):
+    tracks = db.get_tracked_objects(id)
+    results = []
+    for track in tracks:
+        track_dict = dict(track)
+        try:
+            track_dict["trajectory"] = json.loads(track_dict["trajectory_json"])
+        except Exception:
+            track_dict["trajectory"] = []
+        if "trajectory_json" in track_dict:
+            del track_dict["trajectory_json"]
+        results.append(track_dict)
+    return results
