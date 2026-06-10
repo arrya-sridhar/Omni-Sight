@@ -25,14 +25,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source code
 COPY src /app/src
 
-# Warm up/cache HuggingFace and YOLO models during build time
-# This ensures container starts instantly without network calls
-RUN python -c " \
-from sentence_transformers import SentenceTransformer; \
-SentenceTransformer('clip-ViT-B-32'); \
-from ultralytics import YOLO; \
-YOLO('yolov8n.pt'); \
-"
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('clip-ViT-B-32'); from ultralytics import YOLO; YOLO('yolov8n.pt')"
+
 
 # Create directories for DB/uploads
 RUN mkdir -p /app/data /app/uploads
