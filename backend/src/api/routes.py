@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from src.adapters.sqlite_db import SQLiteDatabase
-from src.adapters.sentence_transformer_clip import SentenceTransformerCLIP
+from src.adapters.onnx_clip import ONNXCLIP
 from src.adapters.cv2_reader import CV2VideoReader
 from src.adapters.yolo_tracker import YOLOTracker
 from src.core.extractor import KeyFrameExtractor
@@ -32,11 +32,11 @@ def get_db() -> SQLiteDatabase:
         db_instance = SQLiteDatabase()
     return db_instance
 
-def get_model() -> SentenceTransformerCLIP:
+def get_model() -> ONNXCLIP:
     global model_instance
     if model_instance is None:
-        logger.info("Initializing SentenceTransformers CLIP model (clip-ViT-B-32)...")
-        model_instance = SentenceTransformerCLIP()
+        logger.info("Initializing ONNX CLIP model (clip-vit-base-patch32)...")
+        model_instance = ONNXCLIP()
     return model_instance
 
 def get_tracker() -> YOLOTracker:
@@ -54,7 +54,7 @@ def get_reader() -> CV2VideoReader:
 
 def get_search_service(
     db: SQLiteDatabase = Depends(get_db), 
-    model: SentenceTransformerCLIP = Depends(get_model)
+    model: ONNXCLIP = Depends(get_model)
 ) -> SearchService:
     return SearchService(db, model)
 
