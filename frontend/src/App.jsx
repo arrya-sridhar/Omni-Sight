@@ -15,22 +15,46 @@ export default function App() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("search");
 
+  const isCloud = !API_BASE_URL.includes("localhost") && !API_BASE_URL.includes("127.0.0.1");
+
   const handleSearch = async ({ query, threshold, limit }) => {
     setIsLoading(true);
     setError("");
     try {
-      const response = await fetch(`${API_BASE_URL}/api/search`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query,
-          video_ids: [],
-          threshold,
-          limit,
-        }),
-      });
+      let response;
+      
+      if (isCloud) {
+        // CLOUD FAST PATH: Compute text embedding in the browser
+        const { getTextEmbedding } = await import("./utils/embeddings.js");
+        const embedding = await getTextEmbedding(query);
+        
+        response = await fetch(`${API_BASE_URL}/api/search/vector`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            embedding,
+            video_ids: [],
+            threshold,
+            limit,
+          }),
+        });
+      } else {
+        // LOCAL FULL PATH: Send text to backend for PyTorch embedding
+        response = await fetch(`${API_BASE_URL}/api/search`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query,
+            video_ids: [],
+            threshold,
+            limit,
+          }),
+        });
+      }
 
       if (!response.ok) {
         throw new Error(`Server returned status ${response.status}`);

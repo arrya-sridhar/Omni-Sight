@@ -107,10 +107,22 @@ export async function extractKeyframes(videoFile, onProgress = () => {}, options
           exportCtx.drawImage(video, 0, 0);
 
           exportCanvas.toBlob(
-            (blob) => {
+            async (blob) => {
               if (blob) {
-                keyframes.push(blob);
-                keyframeTimestamps.push(timestamps[currentIndex]);
+                try {
+                  // Import embedding helper dynamically to avoid loading model on initial script parse
+                  const { getImageEmbedding } = await import("./embeddings.js");
+                  const embedding = await getImageEmbedding(blob);
+                  
+                  keyframes.push(blob);
+                  keyframeTimestamps.push(timestamps[currentIndex]);
+                  // Store embedding in a parallel array or attach to metadata
+                  // Actually, we'll expose a separate array or array of objects
+                  if (!metadata.embeddings) metadata.embeddings = [];
+                  metadata.embeddings.push(embedding);
+                } catch (e) {
+                  console.error("Failed to extract embedding for keyframe", e);
+                }
               }
               prevImageData = currentImageData;
               currentIndex++;

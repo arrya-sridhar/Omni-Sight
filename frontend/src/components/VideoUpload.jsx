@@ -73,6 +73,7 @@ export default function VideoUpload({ onUploadComplete }) {
           frameData.append("video_id", cloudVideoId);
           frameData.append("frame_index", i);
           frameData.append("timestamp", keyframeTimestamps[i]);
+          frameData.append("embedding", JSON.stringify(metadata.embeddings[i] || []));
           frameData.append("file", keyframes[i], `keyframe_${i}.jpg`);
 
           const res = await fetch(`${API_BASE_URL}/api/videos/upload/keyframes/frame`, {
