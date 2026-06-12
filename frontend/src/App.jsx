@@ -1,12 +1,15 @@
 import React, { useState } from "react";
-import { Shield, Eye, Database, Info, RefreshCw } from "lucide-react";
+import { Shield, Eye, Database, Info, RefreshCw, Globe } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import SearchBar from "./components/SearchBar";
 import Gallery from "./components/Gallery";
 import Analytics from "./pages/Analytics";
 import VideoUpload from "./components/VideoUpload";
+import AIAssistant from "./components/AIAssistant";
 import { API_BASE_URL } from "./config";
 
 export default function App() {
+  const { t, i18n } = useTranslation();
   const [results, setResults] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
@@ -58,15 +61,27 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-xl font-extrabold tracking-tight bg-gradient-to-r from-white via-slate-200 to-slate-400 bg-clip-text text-transparent">
-                OmniSight AI
+                {t("app_title")}
               </h1>
               <p className="text-[10px] text-indigo-400 font-semibold tracking-wider uppercase">
-                Video Intelligence System
+                {t("app_subtitle")}
               </p>
             </div>
           </div>
           
           <div className="flex items-center gap-2">
+            <div className="flex items-center bg-slate-900 border border-slate-800 rounded-full px-2 py-1 mr-2">
+              <Globe size={14} className="text-gray-400 mr-2" />
+              <select 
+                className="bg-transparent text-xs text-gray-300 outline-none cursor-pointer"
+                value={i18n.language}
+                onChange={(e) => i18n.changeLanguage(e.target.value)}
+              >
+                <option value="en">English</option>
+                <option value="hi">हिंदी</option>
+                <option value="ta">தமிழ்</option>
+              </select>
+            </div>
             <span className="flex items-center gap-1 text-[11px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 font-semibold px-2.5 py-1 rounded-full shadow-inner shadow-emerald-500/5">
               <Shield size={12} />
               Local Privacy Secured
@@ -145,12 +160,15 @@ export default function App() {
         ) : (
           <Analytics />
         )}
+        
+        {/* Floating AI Assistant */}
+        <AIAssistant />
       </main>
 
       {/* Footer bar */}
       <footer className="relative z-10 w-full border-t border-white/5 py-6 mt-auto">
         <div className="max-w-7xl mx-auto px-6 flex flex-col sm:flex-row justify-between items-center text-xs text-gray-500 gap-4">
-          <p>© 2026 OmniSight AI. All processing done locally.</p>
+          <p>© 2026 {t("app_title")}. All processing done locally.</p>
           <div className="flex gap-4">
             <a href="#" className="hover:text-indigo-400 transition-colors">Privacy Policy</a>
             <a href="#" className="hover:text-indigo-400 transition-colors">System Logs</a>

@@ -64,4 +64,6 @@ async def health_check():
     }
 
 # Include API routes
+from src.api.ai_routes import router as ai_router
 app.include_router(api_router, prefix="/api")
+app.include_router(ai_router, prefix="/api/ai")

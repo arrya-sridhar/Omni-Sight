@@ -32,7 +32,8 @@ class SQLiteDatabase(Database):
                     width INTEGER,
                     height INTEGER,
                     status TEXT NOT NULL,
-                    created_at TEXT NOT NULL
+                    created_at TEXT NOT NULL,
+                    error_message TEXT
                 );
             """)
             conn.execute("""
@@ -66,18 +67,23 @@ class SQLiteDatabase(Database):
         with self._get_connection() as conn:
             # Check if video already exists to avoid REPLACE delete triggers
             row = conn.execute("SELECT 1 FROM videos WHERE id = ?", (video["id"],)).fetchone()
+            
+            # Ensure error_message is in the dict if not provided
+            if "error_message" not in video:
+                video["error_message"] = None
+
             if row:
                 conn.execute("""
                     UPDATE videos 
                     SET filename = :filename, filepath = :filepath, duration = :duration, 
                         frame_rate = :frame_rate, width = :width, height = :height, 
-                        status = :status, created_at = :created_at
+                        status = :status, created_at = :created_at, error_message = :error_message
                     WHERE id = :id
                 """, video)
             else:
                 conn.execute("""
-                    INSERT INTO videos (id, filename, filepath, duration, frame_rate, width, height, status, created_at)
-                    VALUES (:id, :filename, :filepath, :duration, :frame_rate, :width, :height, :status, :created_at)
+                    INSERT INTO videos (id, filename, filepath, duration, frame_rate, width, height, status, created_at, error_message)
+                    VALUES (:id, :filename, :filepath, :duration, :frame_rate, :width, :height, :status, :created_at, :error_message)
                 """, video)
             conn.commit()
 

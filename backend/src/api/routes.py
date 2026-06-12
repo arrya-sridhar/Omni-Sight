@@ -167,8 +167,8 @@ def process_video_background(
     except Exception as e:
         logger.error(f"Failed background processing for video {video_id}: {str(e)}", exc_info=True)
         video_record["status"] = "failed"
+        video_record["error_message"] = str(e)
         db.save_video(video_record)
-
 
 # ----------------- HTTP Endpoints -----------------
 

@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from "react";
 import { UploadCloud, CheckCircle, AlertCircle, RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../config";
 
 export default function VideoUpload({ onUploadComplete }) {
+  const { t } = useTranslation();
   const [file, setFile] = useState(null);
   const [status, setStatus] = useState("idle"); // idle, uploading, processing, completed, error
   const [progress, setProgress] = useState(0);
@@ -65,7 +67,7 @@ export default function VideoUpload({ onUploadComplete }) {
           if (onUploadComplete) onUploadComplete(data);
         } else if (data.status === "failed") {
           setStatus("error");
-          setErrorMessage("Video analytics model execution failed.");
+          setErrorMessage(data.error_message || "Video analytics model execution failed.");
           clearInterval(pollInterval);
         }
       } catch (err) {
@@ -78,9 +80,9 @@ export default function VideoUpload({ onUploadComplete }) {
 
   return (
     <div className="w-full max-w-xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl backdrop-blur-md">
-      <h3 className="text-lg font-bold text-white mb-2">Ingest New Video Stream</h3>
+      <h3 className="text-lg font-bold text-white mb-2">{t("ingest_new")}</h3>
       <p className="text-xs text-gray-400 mb-6">
-        Upload a surveillance, dashboard, or traffic video feed. The local AI model extracts frames and calculates velocities completely locally.
+        {t("ingest_desc")}
       </p>
 
       {/* File Dropzone */}
@@ -100,8 +102,8 @@ export default function VideoUpload({ onUploadComplete }) {
             </div>
           ) : (
             <div className="flex flex-col gap-1">
-              <span className="text-sm text-gray-300 font-medium">Drag and drop video file, or click to browse</span>
-              <span className="text-xs text-gray-500">Supports MP4, MKV, AVI, etc.</span>
+              <span className="text-sm text-gray-300 font-medium">{t("drag_drop")}</span>
+              <span className="text-xs text-gray-500">{t("supports")}</span>
             </div>
           )}
         </div>
@@ -114,25 +116,25 @@ export default function VideoUpload({ onUploadComplete }) {
             {status === "uploading" && (
               <span className="text-indigo-400 flex items-center gap-2">
                 <span className="w-4 h-4 border-2 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></span>
-                Uploading video payload...
+                {t("uploading")}
               </span>
             )}
             {status === "processing" && (
               <span className="text-amber-400 flex items-center gap-2">
                 <RefreshCw size={16} className="animate-spin" />
-                Extracting keyframes & tracking objects...
+                {t("extracting")}
               </span>
             )}
             {status === "completed" && (
               <span className="text-emerald-400 flex items-center gap-1.5">
                 <CheckCircle size={16} />
-                Ingestion Completed
+                {t("ingestion_completed")}
               </span>
             )}
             {status === "error" && (
               <span className="text-rose-400 flex items-center gap-1.5">
                 <AlertCircle size={16} />
-                Ingestion Failed
+                {t("ingestion_failed")}
               </span>
             )}
             <span className="text-xs font-mono text-gray-500">{progress}%</span>
@@ -163,7 +165,7 @@ export default function VideoUpload({ onUploadComplete }) {
               onClick={() => setStatus("idle")}
               className="mt-2 text-xs font-semibold text-indigo-400 hover:text-white hover:underline self-start"
             >
-              Upload another video
+              {t("upload_another")}
             </button>
           )}
         </div>
@@ -176,13 +178,13 @@ export default function VideoUpload({ onUploadComplete }) {
             onClick={() => setFile(null)}
             className="px-5 py-2.5 rounded-xl text-sm font-semibold text-gray-400 hover:text-white transition-colors"
           >
-            Cancel
+            {t("cancel")}
           </button>
           <button
             onClick={handleUpload}
             className="bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold px-6 py-2.5 rounded-xl shadow-lg shadow-indigo-600/20 transition-all hover:scale-102"
           >
-            Start Ingestion
+            {t("start_ingestion")}
           </button>
         </div>
       )}
