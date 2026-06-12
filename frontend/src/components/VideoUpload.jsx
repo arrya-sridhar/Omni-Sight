@@ -48,29 +48,66 @@ export default function VideoUpload({ onUploadComplete }) {
 
         setProgress(50);
 
-        // Step 2: Upload keyframes to server
-        const formData = new FormData();
-        formData.append("filename", file.name);
-        formData.append("duration", metadata.duration);
-        formData.append("width", metadata.width);
-        formData.append("height", metadata.height);
-        formData.append("timestamps", JSON.stringify(keyframeTimestamps));
-        
-        keyframes.forEach((blob, i) => {
-          formData.append("files", blob, `keyframe_${i}.jpg`);
-        });
+        // Step 2: Initialize keyframe upload
+        const initData = new FormData();
+        initData.append("filename", file.name);
+        initData.append("duration", metadata.duration);
+        initData.append("width", metadata.width);
+        initData.append("height", metadata.height);
 
-        const res = await fetch(`${API_BASE_URL}/api/videos/upload/keyframes`, {
+        const initRes = await fetch(`${API_BASE_URL}/api/videos/upload/keyframes/init`, {
           method: "POST",
-          body: formData,
+          body: initData,
         });
 
-        if (!res.ok) throw new Error("Failed to upload keyframes to server.");
-        const data = await res.json();
+        if (!initRes.ok) throw new Error("Failed to initialize keyframe upload.");
+        const { video_id: cloudVideoId } = await initRes.json();
 
-        setVideoId(data.id);
+        // Step 3: Upload keyframes in parallel batches
+        const concurrency = 5;
+        let completedKeyframes = 0;
+        const totalKeyframes = keyframes.length;
+
+        const uploadKeyframe = async (i) => {
+          const frameData = new FormData();
+          frameData.append("video_id", cloudVideoId);
+          frameData.append("frame_index", i);
+          frameData.append("timestamp", keyframeTimestamps[i]);
+          frameData.append("file", keyframes[i], `keyframe_${i}.jpg`);
+
+          const res = await fetch(`${API_BASE_URL}/api/videos/upload/keyframes/frame`, {
+            method: "POST",
+            body: frameData,
+          });
+
+          if (!res.ok) throw new Error(`Failed to upload keyframe ${i + 1}`);
+          
+          completedKeyframes++;
+          setProgress(50 + Math.floor((completedKeyframes / totalKeyframes) * 40)); // 50% -> 90%
+        };
+
+        for (let i = 0; i < totalKeyframes; i += concurrency) {
+          const batch = [];
+          for (let j = i; j < Math.min(i + concurrency, totalKeyframes); j++) {
+            batch.push(uploadKeyframe(j));
+          }
+          await Promise.all(batch);
+        }
+
+        // Step 4: Finalize
+        const finalizeData = new FormData();
+        finalizeData.append("video_id", cloudVideoId);
+
+        const finalizeRes = await fetch(`${API_BASE_URL}/api/videos/upload/keyframes/finalize`, {
+          method: "POST",
+          body: finalizeData,
+        });
+
+        if (!finalizeRes.ok) throw new Error("Failed to finalize keyframe upload.");
+        
+        setVideoId(cloudVideoId);
         setStatus("processing");
-        setProgress(60);
+        setProgress(95);
 
       } else {
         // ========== LOCAL FULL PATH ==========

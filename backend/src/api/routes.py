@@ -176,83 +176,90 @@ def process_video_background(
 
 # ----------------- Client-Side Keyframe Upload (Cloud Fast Path) -----------------
 
-@router.post("/videos/upload/keyframes", status_code=status.HTTP_202_ACCEPTED)
-async def upload_keyframes(
-    background_tasks: BackgroundTasks,
+@router.post("/videos/upload/keyframes/init", status_code=status.HTTP_200_OK)
+async def keyframes_init(
     filename: str = Form(...),
     duration: float = Form(0.0),
     width: int = Form(0),
     height: int = Form(0),
-    timestamps: str = Form("[]"),
-    files: List[UploadFile] = File(...),
     db: SQLiteDatabase = Depends(get_db)
 ):
-    """
-    Receives pre-extracted keyframe images from the browser.
-    Runs CLIP embedding only — no YOLO tracking (that requires the full video).
-    This is the fast path for cloud deployments.
-    """
+    """Initialize a cloud keyframe upload session."""
     import datetime
-    
     video_id = str(uuid.uuid4())
-    keyframes_dir = os.path.join("data", "keyframes")
+    
+    keyframes_dir = os.path.join("data", "keyframes", video_id)
     os.makedirs(keyframes_dir, exist_ok=True)
     
-    # Parse timestamps
-    try:
-        ts_list = json.loads(timestamps)
-    except Exception:
-        ts_list = [i * 1.0 for i in range(len(files))]
-    
-    # Create video record
     video_record = {
         "id": video_id,
         "filename": filename,
-        "filepath": "",  # No video file stored for cloud uploads
+        "filepath": "",
         "duration": duration,
         "frame_rate": 1.0,
         "width": width,
         "height": height,
-        "status": "processing",
+        "status": "uploading",
         "created_at": datetime.datetime.now().isoformat()
     }
     db.save_video(video_record)
     
-    # Read all file data eagerly (before background task, since UploadFile is not available later)
-    files_data = []
-    for f in files:
-        data = await f.read()
-        files_data.append((f.filename or f"keyframe_{len(files_data)}.jpg", data))
+    return {"video_id": video_id}
+
+@router.post("/videos/upload/keyframes/frame", status_code=status.HTTP_200_OK)
+async def keyframes_upload_frame(
+    video_id: str = Form(...),
+    frame_index: int = Form(...),
+    timestamp: float = Form(0.0),
+    file: UploadFile = File(...)
+):
+    """Upload a single keyframe image. Tiny request, never times out."""
+    keyframes_dir = os.path.join("data", "keyframes", video_id)
+    os.makedirs(keyframes_dir, exist_ok=True)
     
-    # Process in background to return fast
+    # Save with index-based name for ordered reassembly
+    frame_path = os.path.join(keyframes_dir, f"{frame_index:04d}_{timestamp:.2f}.jpg")
+    with open(frame_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    
+    return {"status": "ok", "frame_index": frame_index}
+
+@router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_202_ACCEPTED)
+async def keyframes_finalize(
+    background_tasks: BackgroundTasks,
+    video_id: str = Form(...),
+    db: SQLiteDatabase = Depends(get_db)
+):
+    """Finalize keyframe upload and trigger CLIP embedding in background."""
+    video_record = db.get_video(video_id)
+    if not video_record:
+        raise HTTPException(status_code=404, detail="Video not found.")
+    
+    video_record["status"] = "processing"
+    db.save_video(video_record)
+    
     background_tasks.add_task(
         process_keyframes_background,
         video_id=video_id,
-        files_data=files_data,
-        ts_list=ts_list,
-        db_path=db.db_path,
-        keyframes_dir=keyframes_dir
+        db_path=db.db_path
     )
     
-    return {
-        "id": video_id,
-        "filename": filename,
-        "status": "processing"
-    }
+    return {"id": video_id, "status": "processing"}
 
 
-def process_keyframes_background(
-    video_id: str,
-    files_data: list,
-    ts_list: list,
-    db_path: str,
-    keyframes_dir: str
-):
-    """Process pre-extracted keyframes: save images and compute CLIP embeddings."""
+def process_keyframes_background(video_id: str, db_path: str):
+    """Process pre-extracted keyframes: compute CLIP embeddings."""
     import numpy as np
     
-    logger.info(f"Processing {len(files_data)} client-extracted keyframes for video {video_id}")
+    keyframes_dir = os.path.join("data", "keyframes", video_id)
     db = SQLiteDatabase(db_path)
+    
+    if not os.path.isdir(keyframes_dir):
+        logger.error(f"Keyframes dir not found for {video_id}")
+        return
+    
+    frame_files = sorted(os.listdir(keyframes_dir))
+    logger.info(f"Processing {len(frame_files)} client-extracted keyframes for video {video_id}")
     
     try:
         model = get_model()
@@ -260,26 +267,24 @@ def process_keyframes_background(
         import torch
         torch.set_num_threads(1)
         
-        for i, (fname, data) in enumerate(files_data):
+        for i, fname in enumerate(frame_files):
             kf_id = str(uuid.uuid4())
-            kf_img_path = os.path.join(keyframes_dir, f"{kf_id}.jpg")
+            kf_img_path = os.path.join(keyframes_dir, fname)
             
-            # Save keyframe image
-            with open(kf_img_path, "wb") as f:
-                f.write(data)
+            # Parse timestamp from filename (format: 0001_12.50.jpg)
+            try:
+                timestamp = float(fname.split("_")[1].replace(".jpg", ""))
+            except Exception:
+                timestamp = float(i)
             
-            # Decode for CLIP embedding
-            np_arr = np.frombuffer(data, np.uint8)
-            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            
+            # Read and decode image
+            frame = cv2.imread(kf_img_path)
             if frame is None:
-                logger.warning(f"Failed to decode keyframe {i}")
+                logger.warning(f"Failed to decode keyframe {fname}")
                 continue
             
             # Generate CLIP embedding
             embedding = model.get_image_embeddings([frame])[0]
-            
-            timestamp = ts_list[i] if i < len(ts_list) else float(i)
             
             db.save_keyframe({
                 "id": kf_id,
@@ -289,7 +294,7 @@ def process_keyframes_background(
                 "embedding": embedding,
                 "image_path": kf_img_path
             })
-            logger.info(f"Saved keyframe {i+1}/{len(files_data)} at t={timestamp:.1f}s")
+            logger.info(f"Embedded keyframe {i+1}/{len(frame_files)} at t={timestamp:.1f}s")
         
         # Mark video as completed
         video_record = db.get_video(video_id)
