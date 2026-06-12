@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from src.adapters.sqlite_db import SQLiteDatabase
 from src.adapters.hf_api_clip import HuggingFaceAPI_CLIP
 from src.adapters.cv2_reader import CV2VideoReader
-from src.adapters.yolo_tracker import YOLOTracker
 from src.core.extractor import KeyFrameExtractor
 from src.core.velocity import VelocityCalculator
 from src.core.search import SearchService
@@ -39,10 +38,11 @@ def get_model() -> HuggingFaceAPI_CLIP:
         model_instance = HuggingFaceAPI_CLIP()
     return model_instance
 
-def get_tracker() -> YOLOTracker:
+def get_tracker() -> Any:
     global tracker_instance
     if tracker_instance is None:
         logger.info("Initializing YOLOv8 Tracker (yolov8n.pt)...")
+        from src.adapters.yolo_tracker import YOLOTracker
         tracker_instance = YOLOTracker()
     return tracker_instance
 
@@ -177,7 +177,7 @@ def process_video_background(
 # ----------------- Client-Side Keyframe Upload (Cloud Fast Path) -----------------
 
 @router.post("/videos/upload/keyframes/init", status_code=status.HTTP_200_OK)
-async def keyframes_init(
+def keyframes_init(
     filename: str = Form(...),
     duration: float = Form(0.0),
     width: int = Form(0),
@@ -207,7 +207,7 @@ async def keyframes_init(
     return {"video_id": video_id}
 
 @router.post("/videos/upload/keyframes/frame", status_code=status.HTTP_200_OK)
-async def keyframes_upload_frame(
+def keyframes_upload_frame(
     video_id: str = Form(...),
     frame_index: int = Form(...),
     timestamp: float = Form(0.0),
@@ -242,25 +242,27 @@ async def keyframes_upload_frame(
     
     return {"status": "ok", "frame_index": frame_index}
 
-@router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_200_OK)
-async def keyframes_finalize(
+@router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_202_ACCEPTED)
+def keyframes_finalize(
+    background_tasks: BackgroundTasks,
     video_id: str = Form(...),
     db: SQLiteDatabase = Depends(get_db)
 ):
-    """Finalize keyframe upload. Marks video as completed immediately.
-    
-    Embeddings are already saved to the DB by the /keyframes/frame endpoint,
-    so there is nothing left to process in a background task.
-    """
+    """Finalize keyframe upload and trigger CLIP embedding in background."""
     video_record = db.get_video(video_id)
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")
     
-    video_record["status"] = "completed"
+    video_record["status"] = "processing"
     db.save_video(video_record)
-    logger.info(f"Video {video_id} finalized and marked completed.")
     
-    return {"id": video_id, "status": "completed"}
+    background_tasks.add_task(
+        process_keyframes_background,
+        video_id=video_id,
+        db_path=db.db_path
+    )
+    
+    return {"id": video_id, "status": "processing"}
 
 
 def process_keyframes_background(video_id: str, db_path: str):
@@ -297,7 +299,7 @@ async def upload_init():
     return {"upload_id": upload_id}
 
 @router.post("/videos/upload/chunk", status_code=status.HTTP_200_OK)
-async def upload_chunk(
+def upload_chunk(
     upload_id: str = Form(...),
     chunk_index: int = Form(...),
     file: UploadFile = File(...)
@@ -313,7 +315,7 @@ async def upload_chunk(
     return {"status": "ok", "chunk_index": chunk_index}
 
 @router.post("/videos/upload/finalize", status_code=status.HTTP_202_ACCEPTED)
-async def upload_finalize(
+def upload_finalize(
     background_tasks: BackgroundTasks,
     upload_id: str = Form(...),
     filename: str = Form(...),
@@ -440,7 +442,7 @@ async def get_video_source(id: str, db: SQLiteDatabase = Depends(get_db)):
     return FileResponse(filepath, media_type="video/mp4")
 
 @router.post("/search", response_model=SearchResponse, status_code=status.HTTP_200_OK)
-async def search_keyframes(
+def search_keyframes(
     req: SearchRequest, 
     search_service: SearchService = Depends(get_search_service)
 ):
@@ -459,57 +461,8 @@ async def search_keyframes(
             detail=f"Search failed due to internal error: {str(e)}"
         )
 
-class VectorSearchRequest(BaseModel):
-    embedding: List[float] = Field(..., description="Pre-computed query embedding vector")
-    video_ids: Optional[List[str]] = Field(default=None)
-    threshold: float = Field(default=0.2, ge=0.0, le=1.0)
-    limit: int = Field(default=10, ge=1)
-
-@router.post("/search/vector", status_code=status.HTTP_200_OK)
-async def search_by_vector(
-    req: VectorSearchRequest,
-    db: SQLiteDatabase = Depends(get_db)
-):
-    """Search keyframes using a pre-computed embedding vector (from browser Xenova CLIP)."""
-    import numpy as np
-    
-    query_vector = np.array(req.embedding, dtype=np.float32)
-    norm_query = np.linalg.norm(query_vector)
-    
-    keyframes = []
-    if req.video_ids:
-        for vid_id in req.video_ids:
-            keyframes.extend(db.get_keyframes(vid_id))
-    else:
-        keyframes = db.get_all_keyframes()
-    
-    results = []
-    for kf in keyframes:
-        kf_vector = np.array(kf["embedding"], dtype=np.float32)
-        norm_kf = np.linalg.norm(kf_vector)
-        
-        if norm_query == 0 or norm_kf == 0:
-            score = 0.0
-        else:
-            score = float(np.dot(query_vector, kf_vector) / (norm_query * norm_kf))
-        
-        if score >= req.threshold:
-            video = db.get_video(kf["video_id"])
-            filename = video["filename"] if video else "unknown"
-            results.append({
-                "video_id": kf["video_id"],
-                "filename": filename,
-                "keyframe_id": kf["id"],
-                "timestamp": kf["timestamp"],
-                "image_url": f"/api/keyframes/{kf['id']}/image",
-                "score": score
-            })
-    
-    results.sort(key=lambda x: x["score"], reverse=True)
-    return {"query": "vector_search", "results": results[:req.limit]}
-
 @router.get("/keyframes/{id}/image", status_code=status.HTTP_200_OK)
-async def get_keyframe_image(id: str, db: SQLiteDatabase = Depends(get_db)):
+def get_keyframe_image(id: str, db: SQLiteDatabase = Depends(get_db)):
     kf = db.get_keyframe(id)
     if not kf:
         raise HTTPException(
@@ -527,18 +480,18 @@ async def get_keyframe_image(id: str, db: SQLiteDatabase = Depends(get_db)):
     return FileResponse(image_path, media_type="image/jpeg")
 
 @router.get("/videos", status_code=status.HTTP_200_OK)
-async def list_videos(db: SQLiteDatabase = Depends(get_db)):
+def list_videos(db: SQLiteDatabase = Depends(get_db)):
     return db.list_videos()
 
 @router.get("/videos/{id}", status_code=status.HTTP_200_OK)
-async def get_video(id: str, db: SQLiteDatabase = Depends(get_db)):
+def get_video_status(id: str, db: SQLiteDatabase = Depends(get_db)):
     video = db.get_video(id)
     if not video:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
     return video
 
 @router.get("/videos/{id}/tracks", status_code=status.HTTP_200_OK)
-async def get_video_tracks(id: str, db: SQLiteDatabase = Depends(get_db)):
+def get_video_tracks(id: str, db: SQLiteDatabase = Depends(get_db)):
     tracks = db.get_tracked_objects(id)
     results = []
     for track in tracks:

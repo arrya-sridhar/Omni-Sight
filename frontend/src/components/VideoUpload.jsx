@@ -106,20 +106,9 @@ export default function VideoUpload({ onUploadComplete }) {
 
         if (!finalizeRes.ok) throw new Error("Failed to finalize keyframe upload.");
         
-        const finalizeJson = await finalizeRes.json();
-        
-        if (finalizeJson.status === "completed") {
-          // Backend marked it completed synchronously — done!
-          setVideoId(cloudVideoId);
-          setStatus("completed");
-          setProgress(100);
-          if (onUploadComplete) onUploadComplete(finalizeJson);
-        } else {
-          // Fallback: poll for completion (legacy backend)
-          setVideoId(cloudVideoId);
-          setStatus("processing");
-          setProgress(95);
-        }
+        setVideoId(cloudVideoId);
+        setStatus("processing");
+        setProgress(95);
 
       } else {
         // ========== LOCAL FULL PATH ==========
