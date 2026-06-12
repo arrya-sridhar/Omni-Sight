@@ -82,7 +82,7 @@ export async function extractKeyframes(videoFile, onProgress = () => {}, options
         video.currentTime = t;
       };
 
-      video.onseeked = () => {
+      video.onseeked = async () => {
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const currentImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
@@ -91,7 +91,7 @@ export async function extractKeyframes(videoFile, onProgress = () => {}, options
         if (isFirstFrame) {
           isKeyframe = true;
           isFirstFrame = false;
-        } else if (prevImageData) {
+        } else {
           const diff = computeFrameDiff(prevImageData.data, currentImageData.data);
           if (diff > diffThreshold) {
             isKeyframe = true;
@@ -99,45 +99,42 @@ export async function extractKeyframes(videoFile, onProgress = () => {}, options
         }
 
         if (isKeyframe) {
-          // Export as JPEG blob at full resolution
           const exportCanvas = document.createElement("canvas");
           exportCanvas.width = video.videoWidth;
           exportCanvas.height = video.videoHeight;
           const exportCtx = exportCanvas.getContext("2d");
           exportCtx.drawImage(video, 0, 0);
 
-          exportCanvas.toBlob(
-            async (blob) => {
-              if (blob) {
-                try {
-                  // Import embedding helper dynamically to avoid loading model on initial script parse
-                  const { getImageEmbedding } = await import("./embeddings.js");
-                  const embedding = await getImageEmbedding(blob);
-                  
-                  keyframes.push(blob);
-                  keyframeTimestamps.push(timestamps[currentIndex]);
-                  // Store embedding in a parallel array or attach to metadata
-                  // Actually, we'll expose a separate array or array of objects
-                  if (!metadata.embeddings) metadata.embeddings = [];
-                  metadata.embeddings.push(embedding);
-                } catch (e) {
-                  console.error("Failed to extract embedding for keyframe", e);
+          await new Promise((resolveBlob) => {
+            exportCanvas.toBlob(
+              async (blob) => {
+                if (blob) {
+                  try {
+                    const { getImageEmbedding } = await import("./embeddings.js");
+                    const embedding = await getImageEmbedding(blob);
+                    
+                    keyframes.push(blob);
+                    keyframeTimestamps.push(timestamps[currentIndex]);
+                    if (!metadata.embeddings) metadata.embeddings = [];
+                    metadata.embeddings.push(embedding);
+                  } catch (e) {
+                    console.error("Failed to extract embedding for keyframe", e);
+                  }
                 }
-              }
-              prevImageData = currentImageData;
-              currentIndex++;
-              onProgress(Math.floor((currentIndex / timestamps.length) * 100));
-              processNextFrame();
-            },
-            "image/jpeg",
-            jpegQuality
-          );
-        } else {
-          prevImageData = currentImageData;
-          currentIndex++;
-          onProgress(Math.floor((currentIndex / timestamps.length) * 100));
-          processNextFrame();
+                resolveBlob();
+              },
+              "image/jpeg",
+              jpegQuality
+            );
+          });
         }
+
+        prevImageData = currentImageData;
+        currentIndex++;
+        onProgress(Math.floor((currentIndex / timestamps.length) * 100));
+        
+        // Use a tiny timeout to avoid completely freezing the main UI thread
+        setTimeout(processNextFrame, 1);
       };
 
       processNextFrame();
