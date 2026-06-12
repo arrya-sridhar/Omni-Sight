@@ -30,7 +30,12 @@ class SearchService:
         threshold: float = 0.2,
         limit: int = 10
     ) -> List[Dict[str, Any]]:
+        import logging
+        logger = logging.getLogger("search")
+        logger.info(f"search_by_vector called. Threshold: {threshold}, limit: {limit}")
+        
         norm_query = np.linalg.norm(query_vector)
+        logger.debug(f"Query vector norm: {norm_query}")
         
         # Load candidate keyframes from DB
         keyframes = []
@@ -39,6 +44,8 @@ class SearchService:
                 keyframes.extend(self.db.get_keyframes(vid_id))
         else:
             keyframes = self.db.get_all_keyframes()
+            
+        logger.info(f"Loaded {len(keyframes)} keyframes from database for search.")
             
         results = []
         for kf in keyframes:
@@ -63,6 +70,7 @@ class SearchService:
                     "score": score
                 })
                 
+        logger.info(f"Search yielded {len(results)} results above threshold {threshold}.")
         # Sort results descending by score
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:limit]

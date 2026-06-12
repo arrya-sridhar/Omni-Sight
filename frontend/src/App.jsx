@@ -18,16 +18,20 @@ export default function App() {
   const isCloud = !API_BASE_URL.includes("localhost") && !API_BASE_URL.includes("127.0.0.1");
 
   const handleSearch = async ({ query, threshold, limit }) => {
+    console.log(`[DEBUG] handleSearch initiated. Query: "${query}", Threshold: ${threshold}, Limit: ${limit}`);
     setIsLoading(true);
     setError("");
     try {
       let response;
       
       if (isCloud) {
-        // CLOUD FAST PATH: Compute text embedding in the browser
+        console.log("[DEBUG] handleSearch: Cloud Mode Enabled. Using Fast Path (client-side text embedding).");
         const { getTextEmbedding } = await import("./utils/embeddings.js");
+        console.log("[DEBUG] handleSearch: getTextEmbedding imported successfully.");
         const embedding = await getTextEmbedding(query);
+        console.log("[DEBUG] handleSearch: Text embedding generated successfully. Length:", embedding?.length);
         
+        console.log("[DEBUG] handleSearch: Sending POST request to /api/search/vector...");
         response = await fetch(`${API_BASE_URL}/api/search/vector`, {
           method: "POST",
           headers: {
@@ -40,8 +44,9 @@ export default function App() {
             limit,
           }),
         });
+        console.log("[DEBUG] handleSearch: POST /api/search/vector completed. Status:", response.status);
       } else {
-        // LOCAL FULL PATH: Send text to backend for PyTorch embedding
+        console.log("[DEBUG] handleSearch: Local Mode Enabled. Sending text query to backend.");
         response = await fetch(`${API_BASE_URL}/api/search`, {
           method: "POST",
           headers: {
@@ -54,19 +59,28 @@ export default function App() {
             limit,
           }),
         });
+        console.log("[DEBUG] handleSearch: POST /api/search completed. Status:", response.status);
       }
 
       if (!response.ok) {
-        throw new Error(`Server returned status ${response.status}`);
+        const errText = await response.text();
+        console.error(`[ERROR] handleSearch: Server returned status ${response.status}. Body:`, errText);
+        throw new Error(`Server returned status ${response.status}: ${errText}`);
       }
 
+      console.log("[DEBUG] handleSearch: Parsing JSON response...");
       const data = await response.json();
+      console.log(`[DEBUG] handleSearch: Search returned ${data.results?.length || 0} results.`);
+      
       setResults(data.results || []);
     } catch (err) {
-      setError(err.message || "Failed to communicate with OmniSight API server.");
-      console.error("Search error:", err);
+      const errMsg = err.message || "Failed to communicate with OmniSight API server.";
+      console.error("[ERROR] handleSearch caught exception:", err);
+      alert(`Search Error: ${errMsg}\nPlease check console for full details.`);
+      setError(errMsg);
     } finally {
       setIsLoading(false);
+      console.log("[DEBUG] handleSearch: Finished execution.");
     }
   };
 

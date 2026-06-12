@@ -110,8 +110,10 @@ export async function extractKeyframes(videoFile, onProgress = () => {}, options
               async (blob) => {
                 if (blob) {
                   try {
+                    console.log(`[DEBUG] extractKeyframes: Getting embedding for frame ${currentIndex}...`);
                     const { getImageEmbedding } = await import("./embeddings.js");
                     const embedding = await getImageEmbedding(blob);
+                    console.log(`[DEBUG] extractKeyframes: Got embedding for frame ${currentIndex}. Length: ${embedding?.length}`);
                     
                     keyframes.push(blob);
                     keyframeTimestamps.push(timestamps[currentIndex]);
@@ -119,7 +121,7 @@ export async function extractKeyframes(videoFile, onProgress = () => {}, options
                     if (!metadata.embeddings) metadata.embeddings = [];
                     metadata.embeddings.push(embedding);
                   } catch (e) {
-                    console.error("Failed to extract embedding for keyframe", e);
+                    console.error(`[ERROR] extractKeyframes: Failed to extract embedding for keyframe ${currentIndex}:`, e);
                   }
                 }
                 resolveBlob();

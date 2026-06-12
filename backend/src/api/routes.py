@@ -472,6 +472,7 @@ def search_keyframes_by_vector(
     req: VectorSearchRequest, 
     search_service: SearchService = Depends(get_search_service)
 ):
+    logger.info(f"Received VectorSearchRequest. Embedding size: {len(req.embedding)}. Threshold: {req.threshold}")
     try:
         results = search_service.search_by_vector(
             query_vector=np.array(req.embedding, dtype=np.float32),
@@ -479,6 +480,7 @@ def search_keyframes_by_vector(
             threshold=req.threshold,
             limit=req.limit
         )
+        logger.info(f"Vector search returned {len(results)} results.")
         return SearchResponse(query="<Vector Search>", results=results)
     except Exception as e:
         logger.error(f"Vector search failed: {str(e)}", exc_info=True)

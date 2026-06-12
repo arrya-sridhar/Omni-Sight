@@ -14,6 +14,7 @@ let textModelInstance = null;
  */
 export async function getExtractor(onProgress = null) {
   if (!extractorInstance) {
+    console.log("[DEBUG] getExtractor: Initializing Xenova/clip-vit-base-patch32 feature-extraction pipeline...");
     try {
       extractorInstance = await pipeline(
         "feature-extraction", 
@@ -22,8 +23,9 @@ export async function getExtractor(onProgress = null) {
           progress_callback: onProgress
         }
       );
+      console.log("[DEBUG] getExtractor: Pipeline initialized successfully.");
     } catch (error) {
-      console.error("Failed to initialize Xenova transformers pipeline:", error);
+      console.error("[ERROR] getExtractor: Failed to initialize Xenova transformers pipeline:", error);
       throw error;
     }
   }
@@ -34,19 +36,30 @@ export async function getExtractor(onProgress = null) {
  * Computes the CLIP embedding for a given image blob or URL.
  */
 export async function getImageEmbedding(imageBlobOrUrl) {
-  const extractor = await getExtractor();
-  
-  let image;
-  if (imageBlobOrUrl instanceof Blob) {
-    image = await RawImage.fromBlob(imageBlobOrUrl);
-  } else {
-    image = await RawImage.fromURL(imageBlobOrUrl);
+  console.log("[DEBUG] getImageEmbedding: Starting. Input type:", typeof imageBlobOrUrl, "IsBlob:", imageBlobOrUrl instanceof Blob);
+  try {
+    const extractor = await getExtractor();
+    
+    let image;
+    if (imageBlobOrUrl instanceof Blob) {
+      console.log("[DEBUG] getImageEmbedding: Parsing Blob to RawImage...");
+      image = await RawImage.fromBlob(imageBlobOrUrl);
+    } else {
+      console.log("[DEBUG] getImageEmbedding: Parsing URL to RawImage...");
+      image = await RawImage.fromURL(imageBlobOrUrl);
+    }
+    
+    console.log("[DEBUG] getImageEmbedding: RawImage loaded. Dimensions:", image.width, "x", image.height);
+    console.log("[DEBUG] getImageEmbedding: Running extractor on image...");
+    const output = await extractor(image);
+    console.log("[DEBUG] getImageEmbedding: Extraction successful. Output dims:", output.dims);
+    
+    // output.data is a Float32Array, convert to normal JS array
+    return Array.from(output.data);
+  } catch (error) {
+    console.error("[ERROR] getImageEmbedding: Failed:", error);
+    throw error;
   }
-  
-  const output = await extractor(image);
-  
-  // output.data is a Float32Array, convert to normal JS array
-  return Array.from(output.data);
 }
 
 /**
@@ -54,22 +67,34 @@ export async function getImageEmbedding(imageBlobOrUrl) {
  * For Xenova/clip-vit-base-patch32, we must use CLIPTextModelWithProjection directly.
  */
 export async function getTextEmbedding(text) {
+  console.log(`[DEBUG] getTextEmbedding: Starting for text: "${text}"`);
   const model_id = "Xenova/clip-vit-base-patch32";
   
-  if (!tokenizerInstance) {
-    tokenizerInstance = await AutoTokenizer.from_pretrained(model_id);
+  try {
+    if (!tokenizerInstance) {
+      console.log("[DEBUG] getTextEmbedding: Initializing AutoTokenizer...");
+      tokenizerInstance = await AutoTokenizer.from_pretrained(model_id);
+      console.log("[DEBUG] getTextEmbedding: AutoTokenizer initialized.");
+    }
+    
+    if (!textModelInstance) {
+      console.log("[DEBUG] getTextEmbedding: Initializing CLIPTextModelWithProjection...");
+      textModelInstance = await CLIPTextModelWithProjection.from_pretrained(model_id);
+      console.log("[DEBUG] getTextEmbedding: Text Model initialized.");
+    }
+    
+    console.log("[DEBUG] getTextEmbedding: Tokenizing text...");
+    const textInputs = tokenizerInstance([text], { padding: true, truncation: true });
+    console.log("[DEBUG] getTextEmbedding: Text Tokenized. Input IDs:", textInputs.input_ids?.data?.length);
+    
+    console.log("[DEBUG] getTextEmbedding: Running inference on Text Model...");
+    const { text_embeds } = await textModelInstance(textInputs);
+    console.log("[DEBUG] getTextEmbedding: Inference successful. Output dims:", text_embeds.dims);
+    
+    // output is [1, 512], convert to JS array
+    return Array.from(text_embeds.data);
+  } catch (error) {
+    console.error("[ERROR] getTextEmbedding: Failed:", error);
+    throw error;
   }
-  
-  if (!textModelInstance) {
-    textModelInstance = await CLIPTextModelWithProjection.from_pretrained(model_id);
-  }
-  
-  // Prepare text inputs
-  const textInputs = tokenizerInstance([text], { padding: true, truncation: true });
-  
-  // Run inference
-  const { text_embeds } = await textModelInstance(textInputs);
-  
-  // output is [1, 512], convert to JS array
-  return Array.from(text_embeds.data);
 }
