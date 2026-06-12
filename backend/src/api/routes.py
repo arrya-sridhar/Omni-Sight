@@ -242,27 +242,25 @@ async def keyframes_upload_frame(
     
     return {"status": "ok", "frame_index": frame_index}
 
-@router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_202_ACCEPTED)
+@router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_200_OK)
 async def keyframes_finalize(
-    background_tasks: BackgroundTasks,
     video_id: str = Form(...),
     db: SQLiteDatabase = Depends(get_db)
 ):
-    """Finalize keyframe upload and trigger CLIP embedding in background."""
+    """Finalize keyframe upload. Marks video as completed immediately.
+    
+    Embeddings are already saved to the DB by the /keyframes/frame endpoint,
+    so there is nothing left to process in a background task.
+    """
     video_record = db.get_video(video_id)
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")
     
-    video_record["status"] = "processing"
+    video_record["status"] = "completed"
     db.save_video(video_record)
+    logger.info(f"Video {video_id} finalized and marked completed.")
     
-    background_tasks.add_task(
-        process_keyframes_background,
-        video_id=video_id,
-        db_path=db.db_path
-    )
-    
-    return {"id": video_id, "status": "processing"}
+    return {"id": video_id, "status": "completed"}
 
 
 def process_keyframes_background(video_id: str, db_path: str):
@@ -460,6 +458,55 @@ async def search_keyframes(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed due to internal error: {str(e)}"
         )
+
+class VectorSearchRequest(BaseModel):
+    embedding: List[float] = Field(..., description="Pre-computed query embedding vector")
+    video_ids: Optional[List[str]] = Field(default=None)
+    threshold: float = Field(default=0.2, ge=0.0, le=1.0)
+    limit: int = Field(default=10, ge=1)
+
+@router.post("/search/vector", status_code=status.HTTP_200_OK)
+async def search_by_vector(
+    req: VectorSearchRequest,
+    db: SQLiteDatabase = Depends(get_db)
+):
+    """Search keyframes using a pre-computed embedding vector (from browser Xenova CLIP)."""
+    import numpy as np
+    
+    query_vector = np.array(req.embedding, dtype=np.float32)
+    norm_query = np.linalg.norm(query_vector)
+    
+    keyframes = []
+    if req.video_ids:
+        for vid_id in req.video_ids:
+            keyframes.extend(db.get_keyframes(vid_id))
+    else:
+        keyframes = db.get_all_keyframes()
+    
+    results = []
+    for kf in keyframes:
+        kf_vector = np.array(kf["embedding"], dtype=np.float32)
+        norm_kf = np.linalg.norm(kf_vector)
+        
+        if norm_query == 0 or norm_kf == 0:
+            score = 0.0
+        else:
+            score = float(np.dot(query_vector, kf_vector) / (norm_query * norm_kf))
+        
+        if score >= req.threshold:
+            video = db.get_video(kf["video_id"])
+            filename = video["filename"] if video else "unknown"
+            results.append({
+                "video_id": kf["video_id"],
+                "filename": filename,
+                "keyframe_id": kf["id"],
+                "timestamp": kf["timestamp"],
+                "image_url": f"/api/keyframes/{kf['id']}/image",
+                "score": score
+            })
+    
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return {"query": "vector_search", "results": results[:req.limit]}
 
 @router.get("/keyframes/{id}/image", status_code=status.HTTP_200_OK)
 async def get_keyframe_image(id: str, db: SQLiteDatabase = Depends(get_db)):
