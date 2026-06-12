@@ -211,9 +211,11 @@ async def keyframes_upload_frame(
     video_id: str = Form(...),
     frame_index: int = Form(...),
     timestamp: float = Form(0.0),
-    file: UploadFile = File(...)
+    embedding: str = Form("[]"),
+    file: UploadFile = File(...),
+    db: SQLiteDatabase = Depends(get_db)
 ):
-    """Upload a single keyframe image. Tiny request, never times out."""
+    """Upload a single keyframe image with its pre-calculated embedding."""
     keyframes_dir = os.path.join("data", "keyframes", video_id)
     os.makedirs(keyframes_dir, exist_ok=True)
     
@@ -221,6 +223,22 @@ async def keyframes_upload_frame(
     frame_path = os.path.join(keyframes_dir, f"{frame_index:04d}_{timestamp:.2f}.jpg")
     with open(frame_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
+        
+    # Parse embedding from stringified JSON array
+    try:
+        emb_list = json.loads(embedding)
+    except Exception:
+        emb_list = []
+        
+    kf_id = str(uuid.uuid4())
+    db.save_keyframe({
+        "id": kf_id,
+        "video_id": video_id,
+        "frame_index": frame_index,
+        "timestamp": timestamp,
+        "embedding": emb_list,
+        "image_path": frame_path
+    })
     
     return {"status": "ok", "frame_index": frame_index}
 
@@ -248,64 +266,23 @@ async def keyframes_finalize(
 
 
 def process_keyframes_background(video_id: str, db_path: str):
-    """Process pre-extracted keyframes: compute CLIP embeddings."""
-    import numpy as np
-    
-    keyframes_dir = os.path.join("data", "keyframes", video_id)
+    """
+    Since embeddings are now generated strictly on the client browser (Xenova) to completely bypass 
+    the Render 512MB RAM server limit and the Hugging Face Free API Rate Limit, 
+    this background task simply verifies the database and marks the video as completed!
+    """
     db = SQLiteDatabase(db_path)
-    
-    if not os.path.isdir(keyframes_dir):
-        logger.error(f"Keyframes dir not found for {video_id}")
-        return
-    
-    frame_files = sorted(os.listdir(keyframes_dir))
-    logger.info(f"Processing {len(frame_files)} client-extracted keyframes for video {video_id}")
+    logger.info(f"Finalizing client-extracted keyframes for video {video_id}")
     
     try:
-        model = get_model()
-        
-        import torch
-        torch.set_num_threads(1)
-        
-        for i, fname in enumerate(frame_files):
-            kf_id = str(uuid.uuid4())
-            kf_img_path = os.path.join(keyframes_dir, fname)
-            
-            # Parse timestamp from filename (format: 0001_12.50.jpg)
-            try:
-                timestamp = float(fname.split("_")[1].replace(".jpg", ""))
-            except Exception:
-                timestamp = float(i)
-            
-            # Read and decode image
-            frame = cv2.imread(kf_img_path)
-            if frame is None:
-                logger.warning(f"Failed to decode keyframe {fname}")
-                continue
-            
-            # Generate CLIP embedding
-            embedding = model.get_image_embeddings([frame])[0]
-            
-            db.save_keyframe({
-                "id": kf_id,
-                "video_id": video_id,
-                "frame_index": i,
-                "timestamp": timestamp,
-                "embedding": embedding,
-                "image_path": kf_img_path
-            })
-            logger.info(f"Embedded keyframe {i+1}/{len(frame_files)} at t={timestamp:.1f}s")
-        
         # Mark video as completed
         video_record = db.get_video(video_id)
         if video_record:
             video_record["status"] = "completed"
             db.save_video(video_record)
-        
-        logger.info(f"Successfully processed all keyframes for video {video_id}")
-        
+            
     except Exception as e:
-        logger.error(f"Failed keyframe processing for {video_id}: {str(e)}", exc_info=True)
+        logger.error(f"Video finalization failed: {e}", exc_info=True)
         video_record = db.get_video(video_id)
         if video_record:
             video_record["status"] = "failed"
