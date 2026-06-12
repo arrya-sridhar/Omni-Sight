@@ -179,12 +179,8 @@ def process_video_background(
 @router.post("/videos/upload/init", status_code=status.HTTP_200_OK)
 async def upload_init():
     upload_id = str(uuid.uuid4())
-    uploads_dir = "uploads"
-    os.makedirs(uploads_dir, exist_ok=True)
-    # Ensure a clean slate for this upload id
-    part_path = os.path.join(uploads_dir, f"{upload_id}.part")
-    if os.path.exists(part_path):
-        os.remove(part_path)
+    chunks_dir = os.path.join("uploads", f"{upload_id}_chunks")
+    os.makedirs(chunks_dir, exist_ok=True)
     return {"upload_id": upload_id}
 
 from fastapi import Form
@@ -194,11 +190,12 @@ async def upload_chunk(
     chunk_index: int = Form(...),
     file: UploadFile = File(...)
 ):
-    uploads_dir = "uploads"
-    part_path = os.path.join(uploads_dir, f"{upload_id}.part")
+    chunks_dir = os.path.join("uploads", f"{upload_id}_chunks")
+    os.makedirs(chunks_dir, exist_ok=True)
     
-    # Append the chunk to the .part file
-    with open(part_path, "ab") as buffer:
+    # Write each chunk to its own numbered file (safe for parallel uploads)
+    chunk_path = os.path.join(chunks_dir, f"{chunk_index:06d}")
+    with open(chunk_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
     return {"status": "ok", "chunk_index": chunk_index}
@@ -211,13 +208,24 @@ async def upload_finalize(
     db: SQLiteDatabase = Depends(get_db)
 ):
     uploads_dir = "uploads"
-    part_path = os.path.join(uploads_dir, f"{upload_id}.part")
+    os.makedirs(uploads_dir, exist_ok=True)
+    chunks_dir = os.path.join(uploads_dir, f"{upload_id}_chunks")
     
-    if not os.path.exists(part_path):
-        raise HTTPException(status_code=404, detail="Upload part file not found.")
-        
+    if not os.path.isdir(chunks_dir):
+        raise HTTPException(status_code=404, detail="Upload chunks not found.")
+    
+    # Reassemble chunks in order into final file
     final_filepath = os.path.join(uploads_dir, f"{upload_id}_{filename}")
-    os.rename(part_path, final_filepath)
+    chunk_files = sorted(os.listdir(chunks_dir))
+    
+    with open(final_filepath, "wb") as outfile:
+        for cf in chunk_files:
+            chunk_path = os.path.join(chunks_dir, cf)
+            with open(chunk_path, "rb") as infile:
+                shutil.copyfileobj(infile, outfile)
+    
+    # Clean up chunk directory
+    shutil.rmtree(chunks_dir, ignore_errors=True)
     
     # Create initial pending video record
     import datetime

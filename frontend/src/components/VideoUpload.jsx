@@ -34,15 +34,17 @@ export default function VideoUpload({ onUploadComplete }) {
       if (!initRes.ok) throw new Error("Failed to initialize upload.");
       const { upload_id } = await initRes.json();
 
-      // 2. Upload Chunks (2MB chunks — fast but safe within proxy timeouts)
-      const chunkSize = 2 * 1024 * 1024;
+      // 2. Upload Chunks in parallel (4MB chunks, 3 concurrent streams)
+      const chunkSize = 4 * 1024 * 1024;
       const totalChunks = Math.ceil(file.size / chunkSize);
-      
-      for (let i = 0; i < totalChunks; i++) {
+      const concurrency = 3;
+      let completedChunks = 0;
+
+      const uploadChunk = async (i) => {
         const start = i * chunkSize;
         const end = Math.min(start + chunkSize, file.size);
         const chunk = file.slice(start, end);
-        
+
         const chunkData = new FormData();
         chunkData.append("upload_id", upload_id);
         chunkData.append("chunk_index", i);
@@ -52,11 +54,19 @@ export default function VideoUpload({ onUploadComplete }) {
           method: "POST",
           body: chunkData,
         });
-        
+
         if (!chunkRes.ok) throw new Error(`Failed to upload chunk ${i+1}/${totalChunks}`);
-        
-        // Progress from 5% up to 45% during upload
-        setProgress(5 + Math.floor((i / totalChunks) * 40));
+        completedChunks++;
+        setProgress(5 + Math.floor((completedChunks / totalChunks) * 40));
+      };
+
+      // Process chunks in batches of 3 concurrently
+      for (let i = 0; i < totalChunks; i += concurrency) {
+        const batch = [];
+        for (let j = i; j < Math.min(i + concurrency, totalChunks); j++) {
+          batch.push(uploadChunk(j));
+        }
+        await Promise.all(batch);
       }
 
       // 3. Finalize Upload
