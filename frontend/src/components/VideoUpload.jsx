@@ -19,6 +19,9 @@ export default function VideoUpload({ onUploadComplete }) {
     }
   };
 
+  // Detect if we're running against a cloud backend or localhost
+  const isCloud = !API_BASE_URL.includes("localhost") && !API_BASE_URL.includes("127.0.0.1");
+
   const handleUpload = async () => {
     if (!file) return;
 
@@ -27,64 +30,110 @@ export default function VideoUpload({ onUploadComplete }) {
     setErrorMessage("");
 
     try {
-      // 1. Initialize Upload
-      const initRes = await fetch(`${API_BASE_URL}/api/videos/upload/init`, {
-        method: "POST"
-      });
-      if (!initRes.ok) throw new Error("Failed to initialize upload.");
-      const { upload_id } = await initRes.json();
+      if (isCloud) {
+        // ========== CLOUD FAST PATH ==========
+        // Extract keyframes in the browser, upload only tiny JPEGs
 
-      // 2. Upload Chunks in parallel (4MB chunks, 3 concurrent streams)
-      const chunkSize = 4 * 1024 * 1024;
-      const totalChunks = Math.ceil(file.size / chunkSize);
-      const concurrency = 3;
-      let completedChunks = 0;
+        // Step 1: Extract keyframes client-side
+        const { extractKeyframes } = await import("../utils/clientExtractor.js");
+        
+        const { keyframes, keyframeTimestamps, metadata } = await extractKeyframes(
+          file,
+          (p) => setProgress(5 + Math.floor(p * 0.4)) // 5% → 45% during extraction
+        );
 
-      const uploadChunk = async (i) => {
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, file.size);
-        const chunk = file.slice(start, end);
+        if (keyframes.length === 0) {
+          throw new Error("No keyframes could be extracted from this video.");
+        }
 
-        const chunkData = new FormData();
-        chunkData.append("upload_id", upload_id);
-        chunkData.append("chunk_index", i);
-        chunkData.append("file", chunk, file.name);
+        setProgress(50);
 
-        const chunkRes = await fetch(`${API_BASE_URL}/api/videos/upload/chunk`, {
-          method: "POST",
-          body: chunkData,
+        // Step 2: Upload keyframes to server
+        const formData = new FormData();
+        formData.append("filename", file.name);
+        formData.append("duration", metadata.duration);
+        formData.append("width", metadata.width);
+        formData.append("height", metadata.height);
+        formData.append("timestamps", JSON.stringify(keyframeTimestamps));
+        
+        keyframes.forEach((blob, i) => {
+          formData.append("files", blob, `keyframe_${i}.jpg`);
         });
 
-        if (!chunkRes.ok) throw new Error(`Failed to upload chunk ${i+1}/${totalChunks}`);
-        completedChunks++;
-        setProgress(5 + Math.floor((completedChunks / totalChunks) * 40));
-      };
+        const res = await fetch(`${API_BASE_URL}/api/videos/upload/keyframes`, {
+          method: "POST",
+          body: formData,
+        });
 
-      // Process chunks in batches of 3 concurrently
-      for (let i = 0; i < totalChunks; i += concurrency) {
-        const batch = [];
-        for (let j = i; j < Math.min(i + concurrency, totalChunks); j++) {
-          batch.push(uploadChunk(j));
+        if (!res.ok) throw new Error("Failed to upload keyframes to server.");
+        const data = await res.json();
+
+        setVideoId(data.id);
+        setStatus("processing");
+        setProgress(60);
+
+      } else {
+        // ========== LOCAL FULL PATH ==========
+        // Upload full video for YOLO tracking + CLIP embedding
+
+        // 1. Initialize Upload
+        const initRes = await fetch(`${API_BASE_URL}/api/videos/upload/init`, {
+          method: "POST"
+        });
+        if (!initRes.ok) throw new Error("Failed to initialize upload.");
+        const { upload_id } = await initRes.json();
+
+        // 2. Upload Chunks in parallel (4MB chunks, 3 concurrent streams)
+        const chunkSize = 4 * 1024 * 1024;
+        const totalChunks = Math.ceil(file.size / chunkSize);
+        const concurrency = 3;
+        let completedChunks = 0;
+
+        const uploadChunk = async (i) => {
+          const start = i * chunkSize;
+          const end = Math.min(start + chunkSize, file.size);
+          const chunk = file.slice(start, end);
+
+          const chunkData = new FormData();
+          chunkData.append("upload_id", upload_id);
+          chunkData.append("chunk_index", i);
+          chunkData.append("file", chunk, file.name);
+
+          const chunkRes = await fetch(`${API_BASE_URL}/api/videos/upload/chunk`, {
+            method: "POST",
+            body: chunkData,
+          });
+
+          if (!chunkRes.ok) throw new Error(`Failed to upload chunk ${i+1}/${totalChunks}`);
+          completedChunks++;
+          setProgress(5 + Math.floor((completedChunks / totalChunks) * 40));
+        };
+
+        for (let i = 0; i < totalChunks; i += concurrency) {
+          const batch = [];
+          for (let j = i; j < Math.min(i + concurrency, totalChunks); j++) {
+            batch.push(uploadChunk(j));
+          }
+          await Promise.all(batch);
         }
-        await Promise.all(batch);
-      }
 
-      // 3. Finalize Upload
-      const finalizeData = new FormData();
-      finalizeData.append("upload_id", upload_id);
-      finalizeData.append("filename", file.name);
-      
-      const finalizeRes = await fetch(`${API_BASE_URL}/api/videos/upload/finalize`, {
-        method: "POST",
-        body: finalizeData,
-      });
-      
-      if (!finalizeRes.ok) throw new Error("Failed to finalize upload.");
-      const data = await finalizeRes.json();
-      
-      setVideoId(data.id);
-      setStatus("processing");
-      setProgress(50);
+        // 3. Finalize Upload
+        const finalizeData = new FormData();
+        finalizeData.append("upload_id", upload_id);
+        finalizeData.append("filename", file.name);
+        
+        const finalizeRes = await fetch(`${API_BASE_URL}/api/videos/upload/finalize`, {
+          method: "POST",
+          body: finalizeData,
+        });
+        
+        if (!finalizeRes.ok) throw new Error("Failed to finalize upload.");
+        const data = await finalizeRes.json();
+        
+        setVideoId(data.id);
+        setStatus("processing");
+        setProgress(50);
+      }
     } catch (err) {
       setStatus("error");
       setErrorMessage(err.message || "An error occurred during upload.");

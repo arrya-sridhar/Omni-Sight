@@ -5,7 +5,7 @@ import logging
 import json
 import cv2
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, BackgroundTasks, Form
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -174,6 +174,139 @@ def process_video_background(
         video_record["error_message"] = str(e)
         db.save_video(video_record)
 
+# ----------------- Client-Side Keyframe Upload (Cloud Fast Path) -----------------
+
+@router.post("/videos/upload/keyframes", status_code=status.HTTP_202_ACCEPTED)
+async def upload_keyframes(
+    background_tasks: BackgroundTasks,
+    filename: str = Form(...),
+    duration: float = Form(0.0),
+    width: int = Form(0),
+    height: int = Form(0),
+    timestamps: str = Form("[]"),
+    files: List[UploadFile] = File(...),
+    db: SQLiteDatabase = Depends(get_db)
+):
+    """
+    Receives pre-extracted keyframe images from the browser.
+    Runs CLIP embedding only — no YOLO tracking (that requires the full video).
+    This is the fast path for cloud deployments.
+    """
+    import datetime
+    
+    video_id = str(uuid.uuid4())
+    keyframes_dir = os.path.join("data", "keyframes")
+    os.makedirs(keyframes_dir, exist_ok=True)
+    
+    # Parse timestamps
+    try:
+        ts_list = json.loads(timestamps)
+    except Exception:
+        ts_list = [i * 1.0 for i in range(len(files))]
+    
+    # Create video record
+    video_record = {
+        "id": video_id,
+        "filename": filename,
+        "filepath": "",  # No video file stored for cloud uploads
+        "duration": duration,
+        "frame_rate": 1.0,
+        "width": width,
+        "height": height,
+        "status": "processing",
+        "created_at": datetime.datetime.now().isoformat()
+    }
+    db.save_video(video_record)
+    
+    # Read all file data eagerly (before background task, since UploadFile is not available later)
+    files_data = []
+    for f in files:
+        data = await f.read()
+        files_data.append((f.filename or f"keyframe_{len(files_data)}.jpg", data))
+    
+    # Process in background to return fast
+    background_tasks.add_task(
+        process_keyframes_background,
+        video_id=video_id,
+        files_data=files_data,
+        ts_list=ts_list,
+        db_path=db.db_path,
+        keyframes_dir=keyframes_dir
+    )
+    
+    return {
+        "id": video_id,
+        "filename": filename,
+        "status": "processing"
+    }
+
+
+def process_keyframes_background(
+    video_id: str,
+    files_data: list,
+    ts_list: list,
+    db_path: str,
+    keyframes_dir: str
+):
+    """Process pre-extracted keyframes: save images and compute CLIP embeddings."""
+    import numpy as np
+    
+    logger.info(f"Processing {len(files_data)} client-extracted keyframes for video {video_id}")
+    db = SQLiteDatabase(db_path)
+    
+    try:
+        model = get_model()
+        
+        import torch
+        torch.set_num_threads(1)
+        
+        for i, (fname, data) in enumerate(files_data):
+            kf_id = str(uuid.uuid4())
+            kf_img_path = os.path.join(keyframes_dir, f"{kf_id}.jpg")
+            
+            # Save keyframe image
+            with open(kf_img_path, "wb") as f:
+                f.write(data)
+            
+            # Decode for CLIP embedding
+            np_arr = np.frombuffer(data, np.uint8)
+            frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            
+            if frame is None:
+                logger.warning(f"Failed to decode keyframe {i}")
+                continue
+            
+            # Generate CLIP embedding
+            embedding = model.get_image_embeddings([frame])[0]
+            
+            timestamp = ts_list[i] if i < len(ts_list) else float(i)
+            
+            db.save_keyframe({
+                "id": kf_id,
+                "video_id": video_id,
+                "frame_index": i,
+                "timestamp": timestamp,
+                "embedding": embedding,
+                "image_path": kf_img_path
+            })
+            logger.info(f"Saved keyframe {i+1}/{len(files_data)} at t={timestamp:.1f}s")
+        
+        # Mark video as completed
+        video_record = db.get_video(video_id)
+        if video_record:
+            video_record["status"] = "completed"
+            db.save_video(video_record)
+        
+        logger.info(f"Successfully processed all keyframes for video {video_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed keyframe processing for {video_id}: {str(e)}", exc_info=True)
+        video_record = db.get_video(video_id)
+        if video_record:
+            video_record["status"] = "failed"
+            video_record["error_message"] = str(e)
+            db.save_video(video_record)
+
 # ----------------- Chunked File Upload API -----------------
 
 @router.post("/videos/upload/init", status_code=status.HTTP_200_OK)
@@ -183,7 +316,6 @@ async def upload_init():
     os.makedirs(chunks_dir, exist_ok=True)
     return {"upload_id": upload_id}
 
-from fastapi import Form
 @router.post("/videos/upload/chunk", status_code=status.HTTP_200_OK)
 async def upload_chunk(
     upload_id: str = Form(...),
