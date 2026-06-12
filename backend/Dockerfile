@@ -30,7 +30,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source code
 COPY src /app/src
 
-RUN python -c "import matplotlib.pyplot; import torch; _orig = torch.load; torch.load = lambda *a, **k: _orig(*a, **{**k, 'weights_only': False}); from huggingface_hub import hf_hub_download; hf_hub_download('Xenova/clip-vit-base-patch32', 'onnx/vision_model.onnx'); hf_hub_download('Xenova/clip-vit-base-patch32', 'onnx/text_model.onnx'); hf_hub_download('Xenova/clip-vit-base-patch32', 'tokenizer.json'); from ultralytics import YOLO; YOLO('yolov8n.pt')"
+RUN python -c "import matplotlib.pyplot; import torch; _orig = torch.load; torch.load = lambda *a, **k: _orig(*a, **{**k, 'weights_only': False}); from ultralytics import YOLO; YOLO('yolov8n.pt')"
 RUN chmod -R 777 $MPLCONFIGDIR
 
 
