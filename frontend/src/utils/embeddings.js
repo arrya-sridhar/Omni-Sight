@@ -1,4 +1,4 @@
-import { pipeline, env } from "@xenova/transformers";
+import { pipeline, env, RawImage } from "@xenova/transformers";
 
 // Disable local file paths since we run in the browser
 env.allowLocalModels = false;
@@ -34,19 +34,14 @@ export async function getExtractor(onProgress = null) {
 export async function getImageEmbedding(imageBlobOrUrl) {
   const extractor = await getExtractor();
   
-  let url = imageBlobOrUrl;
-  let isBlob = false;
-  
+  let image;
   if (imageBlobOrUrl instanceof Blob) {
-    url = URL.createObjectURL(imageBlobOrUrl);
-    isBlob = true;
+    image = await RawImage.fromBlob(imageBlobOrUrl);
+  } else {
+    image = await RawImage.fromURL(imageBlobOrUrl);
   }
   
-  const output = await extractor(url);
-  
-  if (isBlob) {
-    URL.revokeObjectURL(url);
-  }
+  const output = await extractor(image);
   
   // output.data is a Float32Array, convert to normal JS array
   return Array.from(output.data);
