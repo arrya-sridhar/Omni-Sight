@@ -66,12 +66,6 @@ class SearchRequest(BaseModel):
     threshold: float = Field(default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold")
     limit: int = Field(default=10, ge=1, description="Max search results to return")
 
-class VectorSearchRequest(BaseModel):
-    embedding: List[float] = Field(..., description="Pre-computed CLIP embedding vector")
-    video_ids: Optional[List[str]] = Field(default=None, description="Optional list of video IDs to filter by")
-    threshold: float = Field(default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold")
-    limit: int = Field(default=10, ge=1, description="Max search results to return")
-
 class SearchResultItem(BaseModel):
     video_id: str
     filename: str
@@ -217,50 +211,106 @@ async def keyframes_upload_frame(
     video_id: str = Form(...),
     frame_index: int = Form(...),
     timestamp: float = Form(0.0),
-    embedding: str = Form(...),  # JSON string of the float array
-    file: UploadFile = File(...),
-    db: SQLiteDatabase = Depends(get_db)
+    file: UploadFile = File(...)
 ):
-    """Upload a single keyframe image and its pre-computed CLIP vector."""
+    """Upload a single keyframe image. Tiny request, never times out."""
     keyframes_dir = os.path.join("data", "keyframes", video_id)
     os.makedirs(keyframes_dir, exist_ok=True)
     
-    kf_id = str(uuid.uuid4())
-    frame_path = os.path.join(keyframes_dir, f"{kf_id}.jpg")
-    
+    # Save with index-based name for ordered reassembly
+    frame_path = os.path.join(keyframes_dir, f"{frame_index:04d}_{timestamp:.2f}.jpg")
     with open(frame_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
-        
-    try:
-        embedding_list = json.loads(embedding)
-    except Exception:
-        embedding_list = []
-        
-    db.save_keyframe({
-        "id": kf_id,
-        "video_id": video_id,
-        "frame_index": frame_index,
-        "timestamp": timestamp,
-        "embedding": embedding_list,
-        "image_path": frame_path
-    })
     
     return {"status": "ok", "frame_index": frame_index}
 
-@router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_200_OK)
+@router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_202_ACCEPTED)
 async def keyframes_finalize(
+    background_tasks: BackgroundTasks,
     video_id: str = Form(...),
     db: SQLiteDatabase = Depends(get_db)
 ):
-    """Finalize keyframe upload (zero compute backend!)."""
+    """Finalize keyframe upload and trigger CLIP embedding in background."""
     video_record = db.get_video(video_id)
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")
     
-    video_record["status"] = "completed"
+    video_record["status"] = "processing"
     db.save_video(video_record)
     
-    return {"id": video_id, "status": "completed"}
+    background_tasks.add_task(
+        process_keyframes_background,
+        video_id=video_id,
+        db_path=db.db_path
+    )
+    
+    return {"id": video_id, "status": "processing"}
+
+
+def process_keyframes_background(video_id: str, db_path: str):
+    """Process pre-extracted keyframes: compute CLIP embeddings."""
+    import numpy as np
+    
+    keyframes_dir = os.path.join("data", "keyframes", video_id)
+    db = SQLiteDatabase(db_path)
+    
+    if not os.path.isdir(keyframes_dir):
+        logger.error(f"Keyframes dir not found for {video_id}")
+        return
+    
+    frame_files = sorted(os.listdir(keyframes_dir))
+    logger.info(f"Processing {len(frame_files)} client-extracted keyframes for video {video_id}")
+    
+    try:
+        model = get_model()
+        
+        import torch
+        torch.set_num_threads(1)
+        
+        for i, fname in enumerate(frame_files):
+            kf_id = str(uuid.uuid4())
+            kf_img_path = os.path.join(keyframes_dir, fname)
+            
+            # Parse timestamp from filename (format: 0001_12.50.jpg)
+            try:
+                timestamp = float(fname.split("_")[1].replace(".jpg", ""))
+            except Exception:
+                timestamp = float(i)
+            
+            # Read and decode image
+            frame = cv2.imread(kf_img_path)
+            if frame is None:
+                logger.warning(f"Failed to decode keyframe {fname}")
+                continue
+            
+            # Generate CLIP embedding
+            embedding = model.get_image_embeddings([frame])[0]
+            
+            db.save_keyframe({
+                "id": kf_id,
+                "video_id": video_id,
+                "frame_index": i,
+                "timestamp": timestamp,
+                "embedding": embedding,
+                "image_path": kf_img_path
+            })
+            logger.info(f"Embedded keyframe {i+1}/{len(frame_files)} at t={timestamp:.1f}s")
+        
+        # Mark video as completed
+        video_record = db.get_video(video_id)
+        if video_record:
+            video_record["status"] = "completed"
+            db.save_video(video_record)
+        
+        logger.info(f"Successfully processed all keyframes for video {video_id}")
+        
+    except Exception as e:
+        logger.error(f"Failed keyframe processing for {video_id}: {str(e)}", exc_info=True)
+        video_record = db.get_video(video_id)
+        if video_record:
+            video_record["status"] = "failed"
+            video_record["error_message"] = str(e)
+            db.save_video(video_record)
 
 # ----------------- Chunked File Upload API -----------------
 
@@ -432,26 +482,6 @@ async def search_keyframes(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Search failed due to internal error: {str(e)}"
-        )
-
-@router.post("/search/vector", response_model=SearchResponse, status_code=status.HTTP_200_OK)
-async def search_keyframes_by_vector(
-    req: VectorSearchRequest, 
-    search_service: SearchService = Depends(get_search_service)
-):
-    try:
-        results = search_service.search_by_vector(
-            query_vector=req.embedding,
-            video_ids=req.video_ids,
-            threshold=req.threshold,
-            limit=req.limit
-        )
-        return SearchResponse(query="<vector>", results=results)
-    except Exception as e:
-        logger.error(f"Vector search failed: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Vector search failed due to internal error: {str(e)}"
         )
 
 @router.get("/keyframes/{id}/image", status_code=status.HTTP_200_OK)

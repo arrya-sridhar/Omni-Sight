@@ -20,21 +20,8 @@ class SearchService:
             return []
             
         # Get query text embedding
-        query_vector = self.model.get_text_embedding(query)
-        return self.search_by_vector(query_vector, video_ids, threshold, limit)
-
-    def search_by_vector(
-        self,
-        query_vector: List[float],
-        video_ids: List[str] = None, 
-        threshold: float = 0.2, 
-        limit: int = 10
-    ) -> List[Dict[str, Any]]:
-        if not query_vector:
-            return []
-            
-        query_vector_np = np.array(query_vector, dtype=np.float32)
-        norm_query = np.linalg.norm(query_vector_np)
+        query_vector = np.array(self.model.get_text_embedding(query), dtype=np.float32)
+        norm_query = np.linalg.norm(query_vector)
         
         # Load candidate keyframes from DB
         keyframes = []
@@ -52,7 +39,7 @@ class SearchService:
             if norm_query == 0 or norm_kf == 0:
                 score = 0.0
             else:
-                score = float(np.dot(query_vector_np, kf_vector) / (norm_query * norm_kf))
+                score = float(np.dot(query_vector, kf_vector) / (norm_query * norm_kf))
                 
             if score >= threshold:
                 video = self.db.get_video(kf["video_id"])
