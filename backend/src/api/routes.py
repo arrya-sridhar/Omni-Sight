@@ -112,10 +112,14 @@ def process_video_background(
         })
         db.save_video(video_record)
         
-        # Instantiate model dependencies lazily inside background thread
-        model = SentenceTransformerCLIP(model_name)
-        tracker = YOLOTracker(tracker_model)
+        # Reuse global model instances to avoid loading multiple copies into memory
+        model = get_model()
+        tracker = get_tracker()
         extractor = KeyFrameExtractor(threshold=12.0)
+        
+        # Limit PyTorch threads to reduce memory footprint on Render
+        import torch
+        torch.set_num_threads(1)
         
         tracker.reset()
         extractor.reset()
