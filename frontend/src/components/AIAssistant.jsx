@@ -22,22 +22,43 @@ export default function AIAssistant() {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: userMessage.text,
-          use_online: useOnline,
-          api_key: useOnline ? apiKey : ""
-        })
-      });
+      if (!useOnline) {
+        // Direct Local Ollama Fetch
+        const response = await fetch("http://localhost:11434/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "llama3",
+            prompt: `You are OmniSight AI Video Assistant. User asks: ${userMessage.text}`,
+            stream: false
+          })
+        });
 
-      if (!response.ok) {
-        throw new Error("AI service unavailable.");
+        if (!response.ok) {
+          throw new Error("Local Ollama service unavailable. Is it running with OLLAMA_ORIGINS=\"*\"?");
+        }
+
+        const data = await response.json();
+        setMessages((prev) => [...prev, { role: "ai", text: data.response }]);
+      } else {
+        // Online BYOK Backend Fetch
+        const response = await fetch(`${API_BASE_URL}/api/ai/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: userMessage.text,
+            use_online: useOnline,
+            api_key: apiKey
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error("Online AI service unavailable.");
+        }
+
+        const data = await response.json();
+        setMessages((prev) => [...prev, { role: "ai", text: data.reply }]);
       }
-
-      const data = await response.json();
-      setMessages((prev) => [...prev, { role: "ai", text: data.reply }]);
     } catch (err) {
       setMessages((prev) => [...prev, { role: "error", text: err.message }]);
     } finally {

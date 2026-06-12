@@ -23,23 +23,55 @@ export default function VideoUpload({ onUploadComplete }) {
     if (!file) return;
 
     setStatus("uploading");
-    setProgress(10);
+    setProgress(5);
     setErrorMessage("");
 
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
-      const response = await fetch(`${API_BASE_URL}/api/videos/upload`, {
-        method: "POST",
-        body: formData,
+      // 1. Initialize Upload
+      const initRes = await fetch(`${API_BASE_URL}/api/videos/upload/init`, {
+        method: "POST"
       });
+      if (!initRes.ok) throw new Error("Failed to initialize upload.");
+      const { upload_id } = await initRes.json();
 
-      if (!response.ok) {
-        throw new Error("Failed to upload video to server.");
+      // 2. Upload Chunks (512KB chunks to bypass proxy timeouts)
+      const chunkSize = 512 * 1024;
+      const totalChunks = Math.ceil(file.size / chunkSize);
+      
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, file.size);
+        const chunk = file.slice(start, end);
+        
+        const chunkData = new FormData();
+        chunkData.append("upload_id", upload_id);
+        chunkData.append("chunk_index", i);
+        chunkData.append("file", chunk, file.name);
+
+        const chunkRes = await fetch(`${API_BASE_URL}/api/videos/upload/chunk`, {
+          method: "POST",
+          body: chunkData,
+        });
+        
+        if (!chunkRes.ok) throw new Error(`Failed to upload chunk ${i+1}/${totalChunks}`);
+        
+        // Progress from 5% up to 45% during upload
+        setProgress(5 + Math.floor((i / totalChunks) * 40));
       }
 
-      const data = await response.json();
+      // 3. Finalize Upload
+      const finalizeData = new FormData();
+      finalizeData.append("upload_id", upload_id);
+      finalizeData.append("filename", file.name);
+      
+      const finalizeRes = await fetch(`${API_BASE_URL}/api/videos/upload/finalize`, {
+        method: "POST",
+        body: finalizeData,
+      });
+      
+      if (!finalizeRes.ok) throw new Error("Failed to finalize upload.");
+      const data = await finalizeRes.json();
+      
       setVideoId(data.id);
       setStatus("processing");
       setProgress(50);

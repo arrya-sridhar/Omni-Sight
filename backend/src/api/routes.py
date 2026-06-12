@@ -174,7 +174,83 @@ def process_video_background(
         video_record["error_message"] = str(e)
         db.save_video(video_record)
 
-# ----------------- HTTP Endpoints -----------------
+# ----------------- Chunked File Upload API -----------------
+
+@router.post("/videos/upload/init", status_code=status.HTTP_200_OK)
+async def upload_init():
+    upload_id = str(uuid.uuid4())
+    uploads_dir = "uploads"
+    os.makedirs(uploads_dir, exist_ok=True)
+    # Ensure a clean slate for this upload id
+    part_path = os.path.join(uploads_dir, f"{upload_id}.part")
+    if os.path.exists(part_path):
+        os.remove(part_path)
+    return {"upload_id": upload_id}
+
+from fastapi import Form
+@router.post("/videos/upload/chunk", status_code=status.HTTP_200_OK)
+async def upload_chunk(
+    upload_id: str = Form(...),
+    chunk_index: int = Form(...),
+    file: UploadFile = File(...)
+):
+    uploads_dir = "uploads"
+    part_path = os.path.join(uploads_dir, f"{upload_id}.part")
+    
+    # Append the chunk to the .part file
+    with open(part_path, "ab") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    return {"status": "ok", "chunk_index": chunk_index}
+
+@router.post("/videos/upload/finalize", status_code=status.HTTP_202_ACCEPTED)
+async def upload_finalize(
+    background_tasks: BackgroundTasks,
+    upload_id: str = Form(...),
+    filename: str = Form(...),
+    db: SQLiteDatabase = Depends(get_db)
+):
+    uploads_dir = "uploads"
+    part_path = os.path.join(uploads_dir, f"{upload_id}.part")
+    
+    if not os.path.exists(part_path):
+        raise HTTPException(status_code=404, detail="Upload part file not found.")
+        
+    final_filepath = os.path.join(uploads_dir, f"{upload_id}_{filename}")
+    os.rename(part_path, final_filepath)
+    
+    # Create initial pending video record
+    import datetime
+    video_record = {
+        "id": upload_id,
+        "filename": filename,
+        "filepath": final_filepath,
+        "duration": 0.0,
+        "frame_rate": 0.0,
+        "width": 0,
+        "height": 0,
+        "status": "pending",
+        "created_at": datetime.datetime.now().isoformat()
+    }
+    db.save_video(video_record)
+    
+    # Trigger parallel background task thread
+    background_tasks.add_task(
+        process_video_background,
+        video_id=upload_id,
+        filepath=final_filepath,
+        db_path=db.db_path,
+        model_name="clip-ViT-B-32",
+        tracker_model="yolov8n.pt"
+    )
+    
+    return {
+        "id": upload_id,
+        "filename": filename,
+        "status": "pending"
+    }
+
+# ----------------- Legacy HTTP Endpoints -----------------
 
 @router.post("/videos/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_video(
@@ -182,6 +258,7 @@ async def upload_video(
     file: UploadFile = File(...),
     db: SQLiteDatabase = Depends(get_db)
 ):
+    logger.info(f"Received file upload: {file.filename}")
     video_id = str(uuid.uuid4())
     uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
@@ -189,10 +266,13 @@ async def upload_video(
     filepath = os.path.join(uploads_dir, f"{video_id}_{file.filename}")
     
     # Save uploaded file to disk
+    logger.info(f"Saving file to disk: {filepath}")
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
+    logger.info(f"File saved to disk successfully.")
         
     # Create initial pending video record
+    logger.info("Saving initial video record to DB")
     video_record = {
         "id": video_id,
         "filename": file.filename,
@@ -201,8 +281,7 @@ async def upload_video(
         "frame_rate": 0.0,
         "width": 0,
         "height": 0,
-        "status": "pending",
-        "created_at": uuid.uuid4().hex # dummy timestamp or date
+        "status": "pending"
     }
     # Add real timestamp
     import datetime
@@ -210,6 +289,7 @@ async def upload_video(
     db.save_video(video_record)
     
     # Trigger parallel background task thread
+    logger.info("Adding background task")
     background_tasks.add_task(
         process_video_background,
         video_id=video_id,
@@ -218,6 +298,8 @@ async def upload_video(
         model_name="clip-ViT-B-32",
         tracker_model="yolov8n.pt"
     )
+    
+    logger.info("Returning accepted response")
     
     return {
         "id": video_id,
