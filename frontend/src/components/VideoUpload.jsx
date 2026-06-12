@@ -34,8 +34,8 @@ export default function VideoUpload({ onUploadComplete }) {
       if (!initRes.ok) throw new Error("Failed to initialize upload.");
       const { upload_id } = await initRes.json();
 
-      // 2. Upload Chunks (512KB chunks to bypass proxy timeouts)
-      const chunkSize = 512 * 1024;
+      // 2. Upload Chunks (2MB chunks — fast but safe within proxy timeouts)
+      const chunkSize = 2 * 1024 * 1024;
       const totalChunks = Math.ceil(file.size / chunkSize);
       
       for (let i = 0; i < totalChunks; i++) {
