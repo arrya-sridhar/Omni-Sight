@@ -1,9 +1,11 @@
-import { pipeline, env, RawImage } from "@xenova/transformers";
+import { pipeline, env, RawImage, AutoTokenizer, CLIPTextModelWithProjection } from "@xenova/transformers";
 
 // Disable local file paths since we run in the browser
 env.allowLocalModels = false;
 
 let extractorInstance = null;
+let tokenizerInstance = null;
+let textModelInstance = null;
 
 /**
  * Get the CLIP feature extraction pipeline.
@@ -49,9 +51,25 @@ export async function getImageEmbedding(imageBlobOrUrl) {
 
 /**
  * Computes the CLIP embedding for a text query.
+ * For Xenova/clip-vit-base-patch32, we must use CLIPTextModelWithProjection directly.
  */
 export async function getTextEmbedding(text) {
-  const extractor = await getExtractor();
-  const output = await extractor(text);
-  return Array.from(output.data);
+  const model_id = "Xenova/clip-vit-base-patch32";
+  
+  if (!tokenizerInstance) {
+    tokenizerInstance = await AutoTokenizer.from_pretrained(model_id);
+  }
+  
+  if (!textModelInstance) {
+    textModelInstance = await CLIPTextModelWithProjection.from_pretrained(model_id);
+  }
+  
+  // Prepare text inputs
+  const textInputs = tokenizerInstance([text], { padding: true, truncation: true });
+  
+  // Run inference
+  const { text_embeds } = await textModelInstance(textInputs);
+  
+  // output is [1, 512], convert to JS array
+  return Array.from(text_embeds.data);
 }
