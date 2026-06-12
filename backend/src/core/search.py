@@ -21,6 +21,15 @@ class SearchService:
             
         # Get query text embedding
         query_vector = np.array(self.model.get_text_embedding(query), dtype=np.float32)
+        return self.search_by_vector(query_vector, video_ids, threshold, limit)
+        
+    def search_by_vector(
+        self,
+        query_vector: np.ndarray,
+        video_ids: List[str] = None,
+        threshold: float = 0.2,
+        limit: int = 10
+    ) -> List[Dict[str, Any]]:
         norm_query = np.linalg.norm(query_vector)
         
         # Load candidate keyframes from DB

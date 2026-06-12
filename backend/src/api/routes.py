@@ -66,6 +66,12 @@ class SearchRequest(BaseModel):
     threshold: float = Field(default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold")
     limit: int = Field(default=10, ge=1, description="Max search results to return")
 
+class VectorSearchRequest(BaseModel):
+    embedding: List[float] = Field(..., description="Precomputed embedding vector")
+    video_ids: Optional[List[str]] = Field(default=None, description="Optional list of video IDs to filter by")
+    threshold: float = Field(default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold")
+    limit: int = Field(default=10, ge=1, description="Max search results to return")
+
 class SearchResultItem(BaseModel):
     video_id: str
     filename: str
@@ -458,7 +464,27 @@ def search_keyframes(
         logger.error(f"Search failed: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search failed due to internal error: {str(e)}"
+            detail=f"Search execution failed: {str(e)}"
+        )
+
+@router.post("/search/vector", response_model=SearchResponse, status_code=status.HTTP_200_OK)
+def search_keyframes_by_vector(
+    req: VectorSearchRequest, 
+    search_service: SearchService = Depends(get_search_service)
+):
+    try:
+        results = search_service.search_by_vector(
+            query_vector=np.array(req.embedding, dtype=np.float32),
+            video_ids=req.video_ids,
+            threshold=req.threshold,
+            limit=req.limit
+        )
+        return SearchResponse(query="<Vector Search>", results=results)
+    except Exception as e:
+        logger.error(f"Vector search failed: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Vector search execution failed: {str(e)}"
         )
 
 @router.get("/keyframes/{id}/image", status_code=status.HTTP_200_OK)
