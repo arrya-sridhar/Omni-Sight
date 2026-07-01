@@ -77,9 +77,9 @@ class SQLiteDatabase(Database):
             if row:
                 conn.execute(
                     """
-                    UPDATE videos 
-                    SET filename = :filename, filepath = :filepath, duration = :duration, 
-                        frame_rate = :frame_rate, width = :width, height = :height, 
+                    UPDATE videos
+                    SET filename = :filename, filepath = :filepath, duration = :duration,
+                        frame_rate = :frame_rate, width = :width, height = :height,
                         status = :status, created_at = :created_at, error_message = :error_message
                     WHERE id = :id
                 """,

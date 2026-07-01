@@ -31,7 +31,7 @@ export default function VideoUpload({ onUploadComplete }) {
 
     try {
       if (isCloud) {
-        // ========== CLOUD FAST PATH ==========
+        // ---------- CLOUD FAST PATH ----------
         // Extract keyframes in the browser, upload only tiny JPEGs
 
         // Step 1: Extract keyframes client-side
@@ -111,7 +111,7 @@ export default function VideoUpload({ onUploadComplete }) {
         setProgress(95);
 
       } else {
-        // ========== LOCAL FULL PATH ==========
+        // ---------- LOCAL FULL PATH ----------
         // Upload full video for YOLO tracking + CLIP embedding
 
         // 1. Initialize Upload
