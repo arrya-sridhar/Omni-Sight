@@ -151,8 +151,7 @@ export async function extractKeyframes(videoFile, onProgress = () => {}, options
  */
 function computeFrameDiff(data1, data2) {
   let totalDiff = 0;
-  const pixelCount = data1.length / 4; // RGBA = 4 channels per pixel
-
+  // RGBA = 4 channels per pixel
   // Sample every 4th pixel for speed
   const step = 4;
   let sampledCount = 0;
