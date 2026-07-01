@@ -1,23 +1,121 @@
+# .gitlab-ci.yml
+# OmniSight GitLab CI/CD Pipeline (macOS Unix Shell Runner)
+
 stages:
+  - lint
+  - format
+  - type_check
   - test
+  - security
+  - audit
+  - deploy
+  - release
+
+default:
+  before_script:
+    - export PATH="/Users/arryasridhar/.local/bin:$PATH"
+    - export NVM_DIR="$HOME/.nvm"
+    - '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+    - cd backend
+    - uv venv --python 3.11 || true
+    - source .venv/bin/activate
+    - uv pip install -r requirements.txt
+
+# --- LINT STAGE ---
+ruff-check:
+  stage: lint
+  script:
+    - uv pip install ruff
+    - python -m ruff check src tests
+
+eslint-web:
+  stage: lint
+  before_script:
+    - export PATH="/Users/arryasridhar/.local/bin:$PATH"
+    - export NVM_DIR="$HOME/.nvm"
+    - '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+  script:
+    - cd frontend
+    - npm install
+    - npm run lint
+
+# --- FORMAT STAGE ---
+black-check:
+  stage: format
+  script:
+    - uv pip install black
+    - python -m black --check src tests
+
+# --- TYPE_CHECK STAGE ---
+mypy-check:
+  stage: type_check
+  script:
+    - uv pip install mypy
+    - python -m mypy src || exit 0
+
+# --- TEST STAGE ---
+unit-tests:
+  stage: test
+  script:
+    - uv pip install pytest httpx
+    - PYTHONPATH=".." python -m pytest tests/
 
 frontend-build:
   stage: test
-  image: node:18-alpine
+  before_script:
+    - export PATH="/Users/arryasridhar/.local/bin:$PATH"
+    - export NVM_DIR="$HOME/.nvm"
+    - '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
   script:
     - cd frontend
     - npm install
     - npm run build
 
-backend-test:
-  stage: test
-  image: python:3.11-slim
-  before_script:
-    - apt-get update && apt-get install -y --no-install-recommends libgl1-mesa-glx libglib2.0-0 build-essential
-    - cd backend
-    - python -m venv .venv
-    - source .venv/bin/activate
-    - pip install --upgrade pip
-    - pip install -r requirements.txt
+# --- SECURITY STAGE ---
+security-scan:
+  stage: security
   script:
-    - pytest tests/
+    - uv pip install bandit
+    - python -m bandit -r src/ -ll
+  allow_failure: true
+
+# --- AUDIT STAGE ---
+dependency_audit:
+  stage: audit
+  before_script:
+    - export PATH="/Users/arryasridhar/.local/bin:$PATH"
+    - export NVM_DIR="$HOME/.nvm"
+    - '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+  script:
+    - python3 tools/repo_audit.py
+
+# --- DEPLOY STAGE ---
+pages:
+  stage: deploy
+  before_script:
+    - export PATH="/Users/arryasridhar/.local/bin:$PATH"
+    - export NVM_DIR="$HOME/.nvm"
+    - '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
+  script:
+    - cd frontend
+    - npm install
+    - npm run build
+    - mv dist ../public
+  artifacts:
+    paths:
+      - public
+  environment:
+    name: production
+    url: $CI_PAGES_URL
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# --- RELEASE STAGE ---
+cli_release:
+  stage: release
+  before_script:
+    - echo "No setup needed for release"
+  script:
+    - echo "Release job running on Unix Shell."
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

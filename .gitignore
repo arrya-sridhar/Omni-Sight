@@ -32,3 +32,14 @@ logs/
 **/*.db
 **/*.sqlite
 **/*.sqlite3
+
+# Model weights
+**/*.pt
+**/*.onnx
+
+# Cache
+**/.pytest_cache/
+**/.vercel/
+
+# Test files
+*.mp4

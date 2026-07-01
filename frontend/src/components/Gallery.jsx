@@ -1,5 +1,4 @@
-import React from "react";
-import { Film, Calendar, CheckCircle, Percent } from "lucide-react";
+import { Film, CheckCircle, Percent } from "lucide-react";
 import { API_BASE_URL } from "../config";
 
 export default function Gallery({ results, onPlayKeyframe }) {

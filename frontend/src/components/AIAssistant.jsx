@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { MessageSquare, Send, Bot, Server, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../config";

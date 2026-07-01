@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { Shield, Eye, Database, Info, RefreshCw, Globe } from "lucide-react";
+import { useState } from "react";
+import { Shield, Eye, Database, Info, Globe } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import SearchBar from "./components/SearchBar";
 import Gallery from "./components/Gallery";

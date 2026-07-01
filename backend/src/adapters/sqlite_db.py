@@ -1,25 +1,25 @@
 import sqlite3
 import os
-import json
 from typing import List, Dict, Any, Optional
 import numpy as np
 from src.core.ports import Database
 
+
 class SQLiteDatabase(Database):
     """SQLite implementation of the Database port."""
-    
+
     def __init__(self, db_path: str = "data/omnisight.db"):
         self.db_path = db_path
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self._create_tables()
-        
+
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         # Enable foreign keys
         conn.execute("PRAGMA foreign_keys = ON;")
         return conn
-        
+
     def _create_tables(self) -> None:
         with self._get_connection() as conn:
             conn.execute("""
@@ -66,56 +66,71 @@ class SQLiteDatabase(Database):
     def save_video(self, video: Dict[str, Any]) -> None:
         with self._get_connection() as conn:
             # Check if video already exists to avoid REPLACE delete triggers
-            row = conn.execute("SELECT 1 FROM videos WHERE id = ?", (video["id"],)).fetchone()
-            
+            row = conn.execute(
+                "SELECT 1 FROM videos WHERE id = ?", (video["id"],)
+            ).fetchone()
+
             # Ensure error_message is in the dict if not provided
             if "error_message" not in video:
                 video["error_message"] = None
 
             if row:
-                conn.execute("""
-                    UPDATE videos 
-                    SET filename = :filename, filepath = :filepath, duration = :duration, 
-                        frame_rate = :frame_rate, width = :width, height = :height, 
+                conn.execute(
+                    """
+                    UPDATE videos
+                    SET filename = :filename, filepath = :filepath, duration = :duration,
+                        frame_rate = :frame_rate, width = :width, height = :height,
                         status = :status, created_at = :created_at, error_message = :error_message
                     WHERE id = :id
-                """, video)
+                """,
+                    video,
+                )
             else:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT INTO videos (id, filename, filepath, duration, frame_rate, width, height, status, created_at, error_message)
                     VALUES (:id, :filename, :filepath, :duration, :frame_rate, :width, :height, :status, :created_at, :error_message)
-                """, video)
+                """,
+                    video,
+                )
             conn.commit()
 
     def get_video(self, video_id: str) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
-            row = conn.execute("SELECT * FROM videos WHERE id = ?", (video_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM videos WHERE id = ?", (video_id,)
+            ).fetchone()
             return dict(row) if row else None
 
     def list_videos(self) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
-            rows = conn.execute("SELECT * FROM videos ORDER BY created_at DESC").fetchall()
+            rows = conn.execute(
+                "SELECT * FROM videos ORDER BY created_at DESC"
+            ).fetchall()
             return [dict(row) for row in rows]
 
     def save_keyframe(self, keyframe: Dict[str, Any]) -> None:
         # Serialize list of floats to float32 binary blob
         emb_list = keyframe["embedding"]
         emb_blob = np.array(emb_list, dtype=np.float32).tobytes()
-        
+
         db_record = {
             "id": keyframe["id"],
             "video_id": keyframe["video_id"],
             "frame_index": keyframe["frame_index"],
             "timestamp": keyframe["timestamp"],
             "embedding": emb_blob,
-            "image_path": keyframe["image_path"]
+            "image_path": keyframe["image_path"],
         }
-        
+
         with self._get_connection() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO keyframes (id, video_id, frame_index, timestamp, embedding, image_path)
                 VALUES (:id, :video_id, :frame_index, :timestamp, :embedding, :image_path)
-            """, db_record)
+            """,
+                db_record,
+            )
             conn.commit()
 
     def _deserialize_keyframe(self, row: sqlite3.Row) -> Dict[str, Any]:
@@ -126,7 +141,10 @@ class SQLiteDatabase(Database):
 
     def get_keyframes(self, video_id: str) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
-            rows = conn.execute("SELECT * FROM keyframes WHERE video_id = ? ORDER BY timestamp ASC", (video_id,)).fetchall()
+            rows = conn.execute(
+                "SELECT * FROM keyframes WHERE video_id = ? ORDER BY timestamp ASC",
+                (video_id,),
+            ).fetchall()
             return [self._deserialize_keyframe(row) for row in rows]
 
     def get_all_keyframes(self) -> List[Dict[str, Any]]:
@@ -136,19 +154,26 @@ class SQLiteDatabase(Database):
 
     def get_keyframe(self, keyframe_id: str) -> Optional[Dict[str, Any]]:
         with self._get_connection() as conn:
-            row = conn.execute("SELECT * FROM keyframes WHERE id = ?", (keyframe_id,)).fetchone()
+            row = conn.execute(
+                "SELECT * FROM keyframes WHERE id = ?", (keyframe_id,)
+            ).fetchone()
             return self._deserialize_keyframe(row) if row else None
 
     def save_tracked_objects(self, tracked_objects: List[Dict[str, Any]]) -> None:
         with self._get_connection() as conn:
             for obj in tracked_objects:
-                conn.execute("""
+                conn.execute(
+                    """
                     INSERT OR REPLACE INTO tracked_objects (id, video_id, track_id, label, start_timestamp, end_timestamp, avg_velocity, peak_velocity, trajectory_json)
                     VALUES (:id, :video_id, :track_id, :label, :start_timestamp, :end_timestamp, :avg_velocity, :peak_velocity, :trajectory_json)
-                """, obj)
+                """,
+                    obj,
+                )
             conn.commit()
 
     def get_tracked_objects(self, video_id: str) -> List[Dict[str, Any]]:
         with self._get_connection() as conn:
-            rows = conn.execute("SELECT * FROM tracked_objects WHERE video_id = ?", (video_id,)).fetchall()
+            rows = conn.execute(
+                "SELECT * FROM tracked_objects WHERE video_id = ?", (video_id,)
+            ).fetchall()
             return [dict(row) for row in rows]
