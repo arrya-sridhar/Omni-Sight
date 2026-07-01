@@ -12,6 +12,8 @@ stages:
   - release
 
 default:
+  tags:
+    - local-macos
   before_script:
     - export PATH="/Users/arryasridhar/.local/bin:$PATH"
     - export NVM_DIR="$HOME/.nvm"
