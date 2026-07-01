@@ -4,20 +4,21 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from src.core.ports import EmbeddingModel
 
+
 class SentenceTransformerCLIP(EmbeddingModel):
     """SentenceTransformers implementation of the EmbeddingModel port using CLIP."""
-    
+
     def __init__(self, model_name: str = "clip-ViT-B-32"):
         # This will load the model from cache or download it on first init.
         # By default, it operates completely locally once cached.
         self.model = SentenceTransformer(model_name)
-        
+
     def get_image_embeddings(self, images: List[np.ndarray]) -> List[List[float]]:
         if not images:
             return []
-            
+
         from PIL import Image
-        
+
         # OpenCV reads in BGR, CLIP models expect RGB PIL Images
         pil_images = []
         for img in images:
@@ -27,11 +28,11 @@ class SentenceTransformerCLIP(EmbeddingModel):
                 rgb_img = img
             pil_img = Image.fromarray(rgb_img)
             pil_images.append(pil_img)
-            
+
         embeddings = self.model.encode(pil_images, show_progress_bar=False)
         # Convert numpy floats to standard Python float lists
         return [emb.tolist() for emb in embeddings]
-        
+
     def get_text_embedding(self, text: str) -> List[float]:
         embedding = self.model.encode(text, show_progress_bar=False)
         return embedding.tolist()

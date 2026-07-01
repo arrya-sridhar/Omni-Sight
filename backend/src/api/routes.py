@@ -4,9 +4,19 @@ import uuid
 import logging
 import json
 import cv2
-from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, BackgroundTasks, Form
-from fastapi.responses import FileResponse, StreamingResponse
+from typing import List, Optional, Any
+import numpy as np
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    File,
+    UploadFile,
+    BackgroundTasks,
+    Form,
+)
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from src.adapters.sqlite_db import SQLiteDatabase
@@ -25,11 +35,13 @@ model_instance = None
 tracker_instance = None
 reader_instance = None
 
+
 def get_db() -> SQLiteDatabase:
     global db_instance
     if db_instance is None:
         db_instance = SQLiteDatabase()
     return db_instance
+
 
 def get_model() -> HuggingFaceAPI_CLIP:
     global model_instance
@@ -38,13 +50,16 @@ def get_model() -> HuggingFaceAPI_CLIP:
         model_instance = HuggingFaceAPI_CLIP()
     return model_instance
 
+
 def get_tracker() -> Any:
     global tracker_instance
     if tracker_instance is None:
         logger.info("Initializing YOLOv8 Tracker (yolov8n.pt)...")
         from src.adapters.yolo_tracker import YOLOTracker
+
         tracker_instance = YOLOTracker()
     return tracker_instance
+
 
 def get_reader() -> CV2VideoReader:
     global reader_instance
@@ -52,9 +67,10 @@ def get_reader() -> CV2VideoReader:
         reader_instance = CV2VideoReader()
     return reader_instance
 
+
 def get_search_service(
-    db: SQLiteDatabase = Depends(get_db), 
-    model: HuggingFaceAPI_CLIP = Depends(get_model)
+    db: SQLiteDatabase = Depends(get_db),
+    model: HuggingFaceAPI_CLIP = Depends(get_model),
 ) -> SearchService:
     return SearchService(db, model)
 
@@ -62,15 +78,25 @@ def get_search_service(
 # Request and Response schemas
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, description="Natural language search query")
-    video_ids: Optional[List[str]] = Field(default=None, description="Optional list of video IDs to filter by")
-    threshold: float = Field(default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold")
+    video_ids: Optional[List[str]] = Field(
+        default=None, description="Optional list of video IDs to filter by"
+    )
+    threshold: float = Field(
+        default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold"
+    )
     limit: int = Field(default=10, ge=1, description="Max search results to return")
+
 
 class VectorSearchRequest(BaseModel):
     embedding: List[float] = Field(..., description="Precomputed embedding vector")
-    video_ids: Optional[List[str]] = Field(default=None, description="Optional list of video IDs to filter by")
-    threshold: float = Field(default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold")
+    video_ids: Optional[List[str]] = Field(
+        default=None, description="Optional list of video IDs to filter by"
+    )
+    threshold: float = Field(
+        default=0.2, ge=0.0, le=1.0, description="Cosine similarity threshold"
+    )
     limit: int = Field(default=10, ge=1, description="Max search results to return")
+
 
 class SearchResultItem(BaseModel):
     video_id: str
@@ -80,6 +106,7 @@ class SearchResultItem(BaseModel):
     image_url: str
     score: float
 
+
 class SearchResponse(BaseModel):
     query: str
     results: List[SearchResultItem]
@@ -87,100 +114,113 @@ class SearchResponse(BaseModel):
 
 # ----------------- Background Video Processing Pipeline -----------------
 
+
 def process_video_background(
-    video_id: str, 
-    filepath: str, 
-    db_path: str,
-    model_name: str,
-    tracker_model: str
+    video_id: str, filepath: str, db_path: str, model_name: str, tracker_model: str
 ):
     """Executes the extraction and object tracking pipeline in a separate thread."""
     logger.info(f"Starting background processing for video {video_id} ({filepath})")
-    
+
     # Instantiate clean adapters for this background thread
     db = SQLiteDatabase(db_path)
     reader = CV2VideoReader()
-    
+
     video_record = db.get_video(video_id)
     if not video_record:
-        logger.error(f"Video {video_id} not found in database for background processing")
+        logger.error(
+            f"Video {video_id} not found in database for background processing"
+        )
         return
-        
+
     try:
         # 1. Update status to processing and populate metadata
         metadata = reader.get_metadata(filepath)
-        video_record.update({
-            "status": "processing",
-            "duration": metadata["duration"],
-            "frame_rate": metadata["frame_rate"],
-            "width": metadata["width"],
-            "height": metadata["height"]
-        })
+        video_record.update(
+            {
+                "status": "processing",
+                "duration": metadata["duration"],
+                "frame_rate": metadata["frame_rate"],
+                "width": metadata["width"],
+                "height": metadata["height"],
+            }
+        )
         db.save_video(video_record)
-        
+
         # Reuse global model instances to avoid loading multiple copies into memory
         model = get_model()
         tracker = get_tracker()
         extractor = KeyFrameExtractor(threshold=12.0)
-        
+
         # Limit PyTorch threads to reduce memory footprint on Render
         import torch
+
         torch.set_num_threads(1)
-        
+
         tracker.reset()
         extractor.reset()
-        
+
         keyframes_dir = os.path.join(os.path.dirname(db_path), "keyframes")
         os.makedirs(keyframes_dir, exist_ok=True)
-        
+
         # 2. Iterate frames sequentially (Decoupled extraction)
         logger.info("Entering frame processing loop...")
         frame_count = 0
         for frame_index, timestamp, frame in reader.read_frames(filepath):
             frame_count += 1
             # Run Object Tracking on every frame to maintain track IDs
-            active_tracks = tracker.track_frame(frame, frame_index, timestamp)
-            
+            tracker.track_frame(frame, frame_index, timestamp)
+
             # Check if this frame is a Keyframe
             is_kf, diff = extractor.process_frame(frame, frame_index, timestamp)
             if is_kf:
                 kf_id = str(uuid.uuid4())
                 kf_img_path = os.path.join(keyframes_dir, f"{kf_id}.jpg")
-                
+
                 # Save frame image as JPEG file
                 cv2.imwrite(kf_img_path, frame)
-                
+
                 # Generate zero-shot vector embedding
                 embedding = model.get_image_embeddings([frame])[0]
-                
+
                 # Persist keyframe record
-                logger.info(f"Saving keyframe: index={frame_index}, time={timestamp:.2f}, path={kf_img_path}")
-                db.save_keyframe({
-                    "id": kf_id,
-                    "video_id": video_id,
-                    "frame_index": frame_index,
-                    "timestamp": timestamp,
-                    "embedding": embedding,
-                    "image_path": kf_img_path
-                })
-        logger.info(f"Finished frame processing loop. Total frames processed: {frame_count}")
-                
+                logger.info(
+                    f"Saving keyframe: index={frame_index}, time={timestamp:.2f}, path={kf_img_path}"
+                )
+                db.save_keyframe(
+                    {
+                        "id": kf_id,
+                        "video_id": video_id,
+                        "frame_index": frame_index,
+                        "timestamp": timestamp,
+                        "embedding": embedding,
+                        "image_path": kf_img_path,
+                    }
+                )
+        logger.info(
+            f"Finished frame processing loop. Total frames processed: {frame_count}"
+        )
+
         # 3. Compile final tracked trajectories
         compiled_tracks = VelocityCalculator.compile_history(tracker.tracker, video_id)
         db.save_tracked_objects(compiled_tracks)
-        
+
         # 4. Finalize video record
         video_record["status"] = "completed"
         db.save_video(video_record)
         logger.info(f"Successfully finished background processing for video {video_id}")
-        
+
     except Exception as e:
-        logger.error(f"Failed background processing for video {video_id}: {str(e)}", exc_info=True)
+        logger.error(
+            f"Failed background processing for video {video_id}: {str(e)}",
+            exc_info=True,
+        )
         video_record["status"] = "failed"
         video_record["error_message"] = str(e)
         db.save_video(video_record)
 
+
 # ----------------- Client-Side Keyframe Upload (Cloud Fast Path) -----------------
+
 
 @router.post("/videos/upload/keyframes/init", status_code=status.HTTP_200_OK)
 def keyframes_init(
@@ -188,15 +228,16 @@ def keyframes_init(
     duration: float = Form(0.0),
     width: int = Form(0),
     height: int = Form(0),
-    db: SQLiteDatabase = Depends(get_db)
+    db: SQLiteDatabase = Depends(get_db),
 ):
     """Initialize a cloud keyframe upload session."""
     import datetime
+
     video_id = str(uuid.uuid4())
-    
+
     keyframes_dir = os.path.join("data", "keyframes", video_id)
     os.makedirs(keyframes_dir, exist_ok=True)
-    
+
     video_record = {
         "id": video_id,
         "filename": filename,
@@ -206,11 +247,12 @@ def keyframes_init(
         "width": width,
         "height": height,
         "status": "uploading",
-        "created_at": datetime.datetime.now().isoformat()
+        "created_at": datetime.datetime.now().isoformat(),
     }
     db.save_video(video_record)
-    
+
     return {"video_id": video_id}
+
 
 @router.post("/videos/upload/keyframes/frame", status_code=status.HTTP_200_OK)
 def keyframes_upload_frame(
@@ -219,74 +261,75 @@ def keyframes_upload_frame(
     timestamp: float = Form(0.0),
     embedding: str = Form("[]"),
     file: UploadFile = File(...),
-    db: SQLiteDatabase = Depends(get_db)
+    db: SQLiteDatabase = Depends(get_db),
 ):
     """Upload a single keyframe image with its pre-calculated embedding."""
     keyframes_dir = os.path.join("data", "keyframes", video_id)
     os.makedirs(keyframes_dir, exist_ok=True)
-    
+
     # Save with index-based name for ordered reassembly
     frame_path = os.path.join(keyframes_dir, f"{frame_index:04d}_{timestamp:.2f}.jpg")
     with open(frame_path, "wb") as f:
         shutil.copyfileobj(file.file, f)
-        
+
     # Parse embedding from stringified JSON array
     try:
         emb_list = json.loads(embedding)
     except Exception:
         emb_list = []
-        
+
     kf_id = str(uuid.uuid4())
-    db.save_keyframe({
-        "id": kf_id,
-        "video_id": video_id,
-        "frame_index": frame_index,
-        "timestamp": timestamp,
-        "embedding": emb_list,
-        "image_path": frame_path
-    })
-    
+    db.save_keyframe(
+        {
+            "id": kf_id,
+            "video_id": video_id,
+            "frame_index": frame_index,
+            "timestamp": timestamp,
+            "embedding": emb_list,
+            "image_path": frame_path,
+        }
+    )
+
     return {"status": "ok", "frame_index": frame_index}
+
 
 @router.post("/videos/upload/keyframes/finalize", status_code=status.HTTP_202_ACCEPTED)
 def keyframes_finalize(
     background_tasks: BackgroundTasks,
     video_id: str = Form(...),
-    db: SQLiteDatabase = Depends(get_db)
+    db: SQLiteDatabase = Depends(get_db),
 ):
     """Finalize keyframe upload and trigger CLIP embedding in background."""
     video_record = db.get_video(video_id)
     if not video_record:
         raise HTTPException(status_code=404, detail="Video not found.")
-    
+
     video_record["status"] = "processing"
     db.save_video(video_record)
-    
+
     background_tasks.add_task(
-        process_keyframes_background,
-        video_id=video_id,
-        db_path=db.db_path
+        process_keyframes_background, video_id=video_id, db_path=db.db_path
     )
-    
+
     return {"id": video_id, "status": "processing"}
 
 
 def process_keyframes_background(video_id: str, db_path: str):
     """
-    Since embeddings are now generated strictly on the client browser (Xenova) to completely bypass 
-    the Render 512MB RAM server limit and the Hugging Face Free API Rate Limit, 
+    Since embeddings are now generated strictly on the client browser (Xenova) to completely bypass
+    the Render 512MB RAM server limit and the Hugging Face Free API Rate Limit,
     this background task simply verifies the database and marks the video as completed!
     """
     db = SQLiteDatabase(db_path)
     logger.info(f"Finalizing client-extracted keyframes for video {video_id}")
-    
+
     try:
         # Mark video as completed
         video_record = db.get_video(video_id)
         if video_record:
             video_record["status"] = "completed"
             db.save_video(video_record)
-            
+
     except Exception as e:
         logger.error(f"Video finalization failed: {e}", exc_info=True)
         video_record = db.get_video(video_id)
@@ -295,7 +338,9 @@ def process_keyframes_background(video_id: str, db_path: str):
             video_record["error_message"] = str(e)
             db.save_video(video_record)
 
+
 # ----------------- Chunked File Upload API -----------------
+
 
 @router.post("/videos/upload/init", status_code=status.HTTP_200_OK)
 async def upload_init():
@@ -304,51 +349,54 @@ async def upload_init():
     os.makedirs(chunks_dir, exist_ok=True)
     return {"upload_id": upload_id}
 
+
 @router.post("/videos/upload/chunk", status_code=status.HTTP_200_OK)
 def upload_chunk(
     upload_id: str = Form(...),
     chunk_index: int = Form(...),
-    file: UploadFile = File(...)
+    file: UploadFile = File(...),
 ):
     chunks_dir = os.path.join("uploads", f"{upload_id}_chunks")
     os.makedirs(chunks_dir, exist_ok=True)
-    
+
     # Write each chunk to its own numbered file (safe for parallel uploads)
     chunk_path = os.path.join(chunks_dir, f"{chunk_index:06d}")
     with open(chunk_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-        
+
     return {"status": "ok", "chunk_index": chunk_index}
+
 
 @router.post("/videos/upload/finalize", status_code=status.HTTP_202_ACCEPTED)
 def upload_finalize(
     background_tasks: BackgroundTasks,
     upload_id: str = Form(...),
     filename: str = Form(...),
-    db: SQLiteDatabase = Depends(get_db)
+    db: SQLiteDatabase = Depends(get_db),
 ):
     uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
     chunks_dir = os.path.join(uploads_dir, f"{upload_id}_chunks")
-    
+
     if not os.path.isdir(chunks_dir):
         raise HTTPException(status_code=404, detail="Upload chunks not found.")
-    
+
     # Reassemble chunks in order into final file
     final_filepath = os.path.join(uploads_dir, f"{upload_id}_{filename}")
     chunk_files = sorted(os.listdir(chunks_dir))
-    
+
     with open(final_filepath, "wb") as outfile:
         for cf in chunk_files:
             chunk_path = os.path.join(chunks_dir, cf)
             with open(chunk_path, "rb") as infile:
                 shutil.copyfileobj(infile, outfile)
-    
+
     # Clean up chunk directory
     shutil.rmtree(chunks_dir, ignore_errors=True)
-    
+
     # Create initial pending video record
     import datetime
+
     video_record = {
         "id": upload_id,
         "filename": filename,
@@ -358,10 +406,10 @@ def upload_finalize(
         "width": 0,
         "height": 0,
         "status": "pending",
-        "created_at": datetime.datetime.now().isoformat()
+        "created_at": datetime.datetime.now().isoformat(),
     }
     db.save_video(video_record)
-    
+
     # Trigger parallel background task thread
     background_tasks.add_task(
         process_video_background,
@@ -369,36 +417,34 @@ def upload_finalize(
         filepath=final_filepath,
         db_path=db.db_path,
         model_name="clip-ViT-B-32",
-        tracker_model="yolov8n.pt"
+        tracker_model="yolov8n.pt",
     )
-    
-    return {
-        "id": upload_id,
-        "filename": filename,
-        "status": "pending"
-    }
+
+    return {"id": upload_id, "filename": filename, "status": "pending"}
+
 
 # ----------------- Legacy HTTP Endpoints -----------------
+
 
 @router.post("/videos/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_video(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    db: SQLiteDatabase = Depends(get_db)
+    db: SQLiteDatabase = Depends(get_db),
 ):
     logger.info(f"Received file upload: {file.filename}")
     video_id = str(uuid.uuid4())
     uploads_dir = "uploads"
     os.makedirs(uploads_dir, exist_ok=True)
-    
+
     filepath = os.path.join(uploads_dir, f"{video_id}_{file.filename}")
-    
+
     # Save uploaded file to disk
     logger.info(f"Saving file to disk: {filepath}")
     with open(filepath, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-    logger.info(f"File saved to disk successfully.")
-        
+    logger.info("File saved to disk successfully.")
+
     # Create initial pending video record
     logger.info("Saving initial video record to DB")
     video_record = {
@@ -409,13 +455,14 @@ async def upload_video(
         "frame_rate": 0.0,
         "width": 0,
         "height": 0,
-        "status": "pending"
+        "status": "pending",
     }
     # Add real timestamp
     import datetime
+
     video_record["created_at"] = datetime.datetime.now().isoformat()
     db.save_video(video_record)
-    
+
     # Trigger parallel background task thread
     logger.info("Adding background task")
     background_tasks.add_task(
@@ -424,61 +471,67 @@ async def upload_video(
         filepath=filepath,
         db_path=db.db_path,
         model_name="clip-ViT-B-32",
-        tracker_model="yolov8n.pt"
+        tracker_model="yolov8n.pt",
     )
-    
+
     logger.info("Returning accepted response")
-    
-    return {
-        "id": video_id,
-        "filename": file.filename,
-        "status": "pending"
-    }
+
+    return {"id": video_id, "filename": file.filename, "status": "pending"}
+
 
 @router.get("/videos/{id}/source", status_code=status.HTTP_200_OK)
 async def get_video_source(id: str, db: SQLiteDatabase = Depends(get_db)):
     video = db.get_video(id)
     if not video:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
-        
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Video not found"
+        )
+
     filepath = video["filepath"]
     if not os.path.exists(filepath):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source video file not found")
-        
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Source video file not found"
+        )
+
     return FileResponse(filepath, media_type="video/mp4")
+
 
 @router.post("/search", response_model=SearchResponse, status_code=status.HTTP_200_OK)
 def search_keyframes(
-    req: SearchRequest, 
-    search_service: SearchService = Depends(get_search_service)
+    req: SearchRequest, search_service: SearchService = Depends(get_search_service)
 ):
     try:
         results = search_service.search(
             query=req.query,
             video_ids=req.video_ids,
             threshold=req.threshold,
-            limit=req.limit
+            limit=req.limit,
         )
         return SearchResponse(query=req.query, results=results)
     except Exception as e:
         logger.error(f"Search failed: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Search execution failed: {str(e)}"
+            detail=f"Search execution failed: {str(e)}",
         )
 
-@router.post("/search/vector", response_model=SearchResponse, status_code=status.HTTP_200_OK)
+
+@router.post(
+    "/search/vector", response_model=SearchResponse, status_code=status.HTTP_200_OK
+)
 def search_keyframes_by_vector(
-    req: VectorSearchRequest, 
-    search_service: SearchService = Depends(get_search_service)
+    req: VectorSearchRequest,
+    search_service: SearchService = Depends(get_search_service),
 ):
-    logger.info(f"Received VectorSearchRequest. Embedding size: {len(req.embedding)}. Threshold: {req.threshold}")
+    logger.info(
+        f"Received VectorSearchRequest. Embedding size: {len(req.embedding)}. Threshold: {req.threshold}"
+    )
     try:
         results = search_service.search_by_vector(
             query_vector=np.array(req.embedding, dtype=np.float32),
             video_ids=req.video_ids,
             threshold=req.threshold,
-            limit=req.limit
+            limit=req.limit,
         )
         logger.info(f"Vector search returned {len(results)} results.")
         return SearchResponse(query="<Vector Search>", results=results)
@@ -486,8 +539,9 @@ def search_keyframes_by_vector(
         logger.error(f"Vector search failed: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Vector search execution failed: {str(e)}"
+            detail=f"Vector search execution failed: {str(e)}",
         )
+
 
 @router.get("/keyframes/{id}/image", status_code=status.HTTP_200_OK)
 def get_keyframe_image(id: str, db: SQLiteDatabase = Depends(get_db)):
@@ -495,28 +549,33 @@ def get_keyframe_image(id: str, db: SQLiteDatabase = Depends(get_db)):
     if not kf:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Keyframe with ID {id} not found"
+            detail=f"Keyframe with ID {id} not found",
         )
-        
+
     image_path = kf["image_path"]
     if not os.path.exists(image_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Keyframe image file at {image_path} does not exist"
+            detail=f"Keyframe image file at {image_path} does not exist",
         )
-        
+
     return FileResponse(image_path, media_type="image/jpeg")
+
 
 @router.get("/videos", status_code=status.HTTP_200_OK)
 def list_videos(db: SQLiteDatabase = Depends(get_db)):
     return db.list_videos()
 
+
 @router.get("/videos/{id}", status_code=status.HTTP_200_OK)
 def get_video_status(id: str, db: SQLiteDatabase = Depends(get_db)):
     video = db.get_video(id)
     if not video:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Video not found"
+        )
     return video
+
 
 @router.get("/videos/{id}/tracks", status_code=status.HTTP_200_OK)
 def get_video_tracks(id: str, db: SQLiteDatabase = Depends(get_db)):
