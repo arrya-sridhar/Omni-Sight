@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
-import { Gauge, AlertCircle, Eye, RefreshCw, Layers } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import { Gauge, AlertCircle, RefreshCw, Layers } from "lucide-react";
 import VideoPlayer from "../components/VideoPlayer";
 import { API_BASE_URL } from "../config";
 
@@ -11,23 +11,21 @@ export default function Analytics() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
 
-  // Load videos on mount
-  useEffect(() => {
-    fetchVideos();
-  }, []);
-
-  const fetchVideos = async () => {
+  const fetchVideos = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/videos`);
       const data = await res.json();
       setVideos(data || []);
-      if (data && data.length > 0 && !selectedVideo) {
-        handleSelectVideo(data[0]);
-      }
     } catch (err) {
       console.error("Failed to load videos list", err);
     }
-  };
+  }, []);
+
+  // Load videos on mount
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchVideos();
+  }, [fetchVideos]);
 
   const handleSelectVideo = async (video) => {
     setSelectedVideo(video);

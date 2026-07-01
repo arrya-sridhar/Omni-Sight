@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { UploadCloud, CheckCircle, AlertCircle, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../config";
@@ -205,7 +205,7 @@ export default function VideoUpload({ onUploadComplete }) {
     }, 2000);
 
     return () => clearInterval(pollInterval);
-  }, [status, videoId]);
+  }, [status, videoId, onUploadComplete]);
 
   return (
     <div className="w-full max-w-xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl backdrop-blur-md">

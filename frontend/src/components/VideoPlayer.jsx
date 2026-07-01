@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState } from "react";
-import { Play, Pause, AlertTriangle, Shield } from "lucide-react";
+import { useRef, useEffect, useState, useMemo, useCallback } from "react";
+import { Play, Pause, AlertTriangle } from "lucide-react";
 
 export default function VideoPlayer({ videoUrl, tracks = [], speedThreshold = 100 }) {
   const videoRef = useRef(null);
@@ -7,7 +7,6 @@ export default function VideoPlayer({ videoUrl, tracks = [], speedThreshold = 10
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [alerts, setAlerts] = useState([]);
 
   // Handle play/pause
   const togglePlay = () => {
@@ -22,13 +21,12 @@ export default function VideoPlayer({ videoUrl, tracks = [], speedThreshold = 10
   };
 
   // Compile unique alerts for objects exceeding the speed threshold
-  useEffect(() => {
-    const activeAlerts = tracks.filter(t => t.peak_velocity > speedThreshold);
-    setAlerts(activeAlerts);
+  const alerts = useMemo(() => {
+    return tracks.filter(t => t.peak_velocity > speedThreshold);
   }, [tracks, speedThreshold]);
 
   // Update canvas bounds and redraw bounding boxes when time updates
-  const drawOverlays = () => {
+  const drawOverlays = useCallback(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
@@ -81,7 +79,7 @@ export default function VideoPlayer({ videoUrl, tracks = [], speedThreshold = 10
         }
       }
     });
-  };
+  }, [tracks, speedThreshold]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -102,7 +100,7 @@ export default function VideoPlayer({ videoUrl, tracks = [], speedThreshold = 10
         video.removeEventListener("loadedmetadata", handleLoadedMetadata);
       };
     }
-  }, [tracks, speedThreshold]);
+  }, [tracks, speedThreshold, drawOverlays]);
 
   return (
     <div className="w-full max-w-4xl mx-auto bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl flex flex-col gap-6">

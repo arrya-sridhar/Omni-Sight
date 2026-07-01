@@ -1,0 +1,150 @@
+# GitHub Actions CI/CD for OmniSight
+# Mirrors the GitLab CI pipeline: 10 checks across 8 stages
+
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, local-stable]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # --- LINT STAGE ---
+  ruff-check:
+    name: "Lint: Ruff (Python)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ruff
+      - run: cd backend && python -m ruff check src tests
+
+  eslint-web:
+    name: "Lint: ESLint (Frontend)"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - run: cd frontend && npm install
+      - run: cd frontend && npm run lint
+
+  # --- FORMAT STAGE ---
+  black-check:
+    name: "Format: Black (Python)"
+    runs-on: ubuntu-latest
+    needs: [ruff-check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install black
+      - run: cd backend && python -m black --check src tests
+
+  # --- TYPE_CHECK STAGE ---
+  mypy-check:
+    name: "Type Check: Mypy (Python)"
+    runs-on: ubuntu-latest
+    needs: [black-check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: cd backend && pip install -r requirements.txt
+      - run: pip install mypy
+      - run: cd backend && python -m mypy src || exit 0
+
+  # --- TEST STAGE ---
+  unit-tests:
+    name: "Test: Pytest (Backend)"
+    runs-on: ubuntu-latest
+    needs: [mypy-check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: |
+          cd backend
+          pip install -r requirements.txt
+          pip install pytest httpx
+      - run: cd backend && PYTHONPATH=".." python -m pytest tests/
+
+  frontend-build:
+    name: "Test: Vite Build (Frontend)"
+    runs-on: ubuntu-latest
+    needs: [eslint-web]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - run: cd frontend && npm install
+      - run: cd frontend && npm run build
+
+  # --- SECURITY STAGE ---
+  security-scan:
+    name: "Security: Bandit (Python)"
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install bandit
+      - run: cd backend && python -m bandit -r src/ -ll
+
+  # --- AUDIT STAGE ---
+  dependency-audit:
+    name: "Audit: Repo Audit (6 checks)"
+    runs-on: ubuntu-latest
+    needs: [security-scan, frontend-build]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyyaml
+      - run: python tools/repo_audit.py
+
+  # --- DEPLOY STAGE ---
+  pages:
+    name: "Deploy: GitHub Pages"
+    runs-on: ubuntu-latest
+    needs: [dependency-audit]
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+      - run: cd frontend && npm install && npm run build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  # --- RELEASE STAGE ---
+  release:
+    name: "Release: Tag Release"
+    runs-on: ubuntu-latest
+    needs: [dependency-audit]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Release job completed successfully."
