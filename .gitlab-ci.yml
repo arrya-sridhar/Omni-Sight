@@ -27,8 +27,12 @@ default:
 ruff-check:
   stage: lint
   script:
-    - uv pip install ruff
+    - uv pip install ruff vulture flake8 pylint pyupgrade
     - python -m ruff check src tests
+    - vulture src/
+    - flake8 src/
+    - pylint src/
+    - pyupgrade `find src -name "*.py"` || true
 
 eslint-web:
   stage: lint
@@ -77,9 +81,10 @@ frontend-build:
 security-scan:
   stage: security
   script:
-    - uv pip install bandit trufflehog3
+    - uv pip install bandit trufflehog3 semgrep
     - python -m bandit -r src/ -ll
     - trufflehog3 .
+    - semgrep --config auto .
   allow_failure: true
 
 # --- AUDIT STAGE ---

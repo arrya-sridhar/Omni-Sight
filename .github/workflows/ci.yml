@@ -19,8 +19,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ruff
+      - run: pip install ruff vulture flake8 pylint pyupgrade
       - run: cd backend && python -m ruff check src tests
+      - run: cd backend && vulture src/
+      - run: cd backend && flake8 src/
+      - run: cd backend && pylint src/
+      - run: cd backend && find src -name "*.py" -exec pyupgrade {} + || true
 
   eslint-web:
     name: "Lint: ESLint (Frontend)"
@@ -99,9 +103,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install bandit trufflehog3
+      - run: pip install bandit trufflehog3 semgrep
       - run: cd backend && python -m bandit -r src/ -ll
       - run: trufflehog3 .
+      - run: semgrep --config auto .
 
   # --- AUDIT STAGE ---
   dependency-audit:
