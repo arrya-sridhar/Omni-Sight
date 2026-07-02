@@ -12,9 +12,12 @@ Thumbs.db
 **/dist/
 **/build/
 **/*.log
-**/.env*
+**/.env
+**/.env.local
+**/.env.development
+**/.env.production.local
 !**/.env.example
-.env
+!**/.env.production
 *.local
 **/__pycache__/
 **/*.pyc
