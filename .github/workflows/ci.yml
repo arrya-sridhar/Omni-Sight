@@ -73,8 +73,8 @@ jobs:
       - run: |
           cd backend
           pip install -r requirements.txt
-          pip install pytest httpx
-      - run: cd backend && PYTHONPATH=".." python -m pytest tests/
+          pip install pytest pytest-cov httpx
+      - run: cd backend && PYTHONPATH=".." python -m pytest tests/ --cov=src --cov-report=term --cov-fail-under=80
 
   frontend-build:
     name: "Test: Vite Build (Frontend)"
@@ -99,8 +99,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install bandit
+      - run: pip install bandit trufflehog3
       - run: cd backend && python -m bandit -r src/ -ll
+      - run: trufflehog3 .
 
   # --- AUDIT STAGE ---
   dependency-audit:
@@ -112,7 +113,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install pyyaml
+      - run: pip install pyyaml pip-audit
+      - run: pip-audit -r backend/requirements.txt || true
       - run: python tools/repo_audit.py
 
   # --- DEPLOY STAGE ---
@@ -147,4 +149,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
+      - run: pip install git-cliff
+      - run: git-cliff -o CHANGELOG.md
       - run: echo "Release job completed successfully."

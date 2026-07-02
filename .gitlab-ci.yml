@@ -59,8 +59,8 @@ mypy-check:
 unit-tests:
   stage: test
   script:
-    - uv pip install pytest httpx
-    - PYTHONPATH=".." python -m pytest tests/
+    - uv pip install pytest pytest-cov httpx
+    - PYTHONPATH=".." python -m pytest tests/ --cov=src --cov-report=term --cov-fail-under=80
 
 frontend-build:
   stage: test
@@ -77,8 +77,9 @@ frontend-build:
 security-scan:
   stage: security
   script:
-    - uv pip install bandit
+    - uv pip install bandit trufflehog3
     - python -m bandit -r src/ -ll
+    - trufflehog3 .
   allow_failure: true
 
 # --- AUDIT STAGE ---
@@ -89,6 +90,8 @@ dependency_audit:
     - export NVM_DIR="$HOME/.nvm"
     - '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"'
   script:
+    - uv pip install pip-audit
+    - pip-audit -r backend/requirements.txt || true
     - python3 tools/repo_audit.py
 
 # --- DEPLOY STAGE ---
@@ -118,6 +121,8 @@ cli_release:
   before_script:
     - echo "No setup needed for release"
   script:
+    - uv pip install git-cliff
+    - git-cliff -o CHANGELOG.md
     - echo "Release job running on Unix Shell."
   rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
