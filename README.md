@@ -4,7 +4,7 @@ OmniSight AI is a high-performance, local-first multi-modal video intelligence s
 
 ---
 
-## 🌟 Key Features
+##  Key Features
 
 * **Zero-Shot Natural Language Search**: Input query prompts like "a white car passing" or "someone running" and retrieve relevant keyframe matches immediately. Uses SentenceTransformers CLIP (`clip-ViT-B-32`) with SQLite embedding storage and fast vector similarity searches.
 * **Object Velocity Tracking**: Detects objects with YOLOv8-nano and tracks centroids to measure object velocity in pixels per second.
